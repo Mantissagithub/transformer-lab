@@ -6,7 +6,7 @@ from layer_normalization import LayerNormalization
 from residual_connection import ResidualCOnnection
 from multihead_attention import MultiHeadAttentionNetwork
 
-class EnocoderBlock(nn.Module):
+class EncoderBlock(nn.Module):
     def __init__(self, self_attention_block : MultiHeadAttentionNetwork, feed_forward_block : FeedForwardNetwork, dropout : float):
         super().__init__()
         self.self_attention_block = self_attention_block
