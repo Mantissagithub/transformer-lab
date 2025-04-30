@@ -32,12 +32,13 @@ def get_all_sentences(ds, lang):
 
 def get_or_build_tokenizer(config, dataset, lang):
     tokenizer_file = Path(config['tokenizer_file'].format(lang))
+    tokenizer_file.parent.mkdir(parents=True, exist_ok=True)
     if tokenizer_file.exists():
         tokenizer = Tokenizer.from_file(str(tokenizer_file))
     else:
         tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
-        trainer = WordLevelTrainer(vocab_size=config['vocab_size'], special_tokens=["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]"], min_frequency=2)
+        trainer = WordLevelTrainer(vocab_size=config['vocab_size'], special_tokens=["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]", "[SOS]", "[POS]", "[EOS]"], min_frequency=2)
         tokenizer.train_from_iterator(get_all_sentences(dataset, lang), trainer=trainer)
         tokenizer.save(str(tokenizer_file))
 
@@ -56,6 +57,9 @@ def get_dataset(config):
     src_tokenizer = get_or_build_tokenizer(config, raw_dataset, config['lang_src'])
     tgt_tokenizer = get_or_build_tokenizer(config, raw_dataset, config['lang_tgt'])
 
+    # print(src_tokenizer)
+    # print(tgt_tokenizer)
+
     train_dataset_size = int(0.9 * len(raw_dataset))
     val_dset_size = len(raw_dataset) - train_dataset_size
     train_dataset, val_dataset = random_split(raw_dataset, [train_dataset_size, val_dset_size]) 
@@ -67,8 +71,8 @@ def get_dataset(config):
     max_len_tgt = 0
 
     for item in raw_dataset:
-        src_ids = src_tokenizer.encode(item['translation'][config['lang_src']]).ids
-        tgt_ids = tgt_tokenizer.encode(item['translation'][config['lang_tgt']]).ids
+        src_ids = src_tokenizer.encode(item['src']).ids
+        tgt_ids = tgt_tokenizer.encode(item['tgt']).ids
         max_len_src = max(max_len_src, len(src_ids))
         max_len_tgt = max(max_len_tgt, len(tgt_ids))
 
@@ -159,5 +163,3 @@ if __name__ == '__main__':
     warnings.filterwarnings("ignore")
     config = get_config()
     train_model(config)
-
-
