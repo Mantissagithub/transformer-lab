@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import math
 
+# need to add kv cache over here, a simpler version without eviction strategies as of now, i will use lru eviction strategy maybe
+# how to do it? -> so need to store the past key value pairs in the forward function and then concatenate them with the current key value pairs with their respective masks and also add the logc of lru eviction strategy
 class MultiHeadAttentionNetwork(nn.Module):
     def __init__(self, d_model_size: int, h : int, dropout : float):
         super().__init__()
@@ -29,7 +31,7 @@ class MultiHeadAttentionNetwork(nn.Module):
             attention_scores = dropout(attention_scores)
 
         return (attention_scores @ value), attention_scores
-    
+
     def forward(self, k, q, v, mask):
         query = self.wq(q)
         key = self.wk(k)
@@ -42,5 +44,5 @@ class MultiHeadAttentionNetwork(nn.Module):
         x, self.attention_scores = MultiHeadAttentionNetwork.attention(query, key, value, mask, self.dropout)
 
         x = x.transpose(1, 2).contiguous().view(x.shape[0], -1, self.h * self.dk)
-        
+
         return self.wo(x)

@@ -17,66 +17,97 @@ from transformer_model import build_transformer
 
 from config import get_config, get_weights_file_path
 
-from tqdm import tqdm 
+from tqdm import tqdm
 
 import warnings
 
-def get_all_sentences(ds, lang):
+def get_all_sentences(ds, field):
     sentences = []
     for example in ds:
-        if lang == 'en':
-            sentences.append(example['src'])
-        else:
-            sentences.append(example['tgt'])
+        sentences.append(example[field])
     return sentences
 
-def get_or_build_tokenizer(config, dataset, lang):
-    tokenizer_file = Path(config['tokenizer_file'].format(lang))
+def get_or_build_tokenizer(config, dataset, field):
+    tokenizer_file = Path(config['tokenizer_file'].format(field))
     tokenizer_file.parent.mkdir(parents=True, exist_ok=True)
     if tokenizer_file.exists():
         tokenizer = Tokenizer.from_file(str(tokenizer_file))
     else:
         tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
-        trainer = WordLevelTrainer(vocab_size=config['vocab_size'], special_tokens=["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]", "[SOS]", "[POS]", "[EOS]"], min_frequency=2)
-        tokenizer.train_from_iterator(get_all_sentences(dataset, lang), trainer=trainer)
+        trainer = WordLevelTrainer(
+            vocab_size=config['vocab_size'],
+            special_tokens=["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]", "[SOS]", "[POS]", "[EOS]"],
+            min_frequency=2
+        )
+        tokenizer.train_from_iterator(get_all_sentences(dataset, field), trainer=trainer)
         tokenizer.save(str(tokenizer_file))
 
     return tokenizer
 
-def save_dataset_to_json(dataset):
-    with open('dataset.json', 'w') as f:
-        for item in dataset:
-            f.write(str(item) + '\n')
+def save_dataset_to_json(dataset, filename='meetingbank_dataset.json'):
+    import json
+    with open(filename, 'w') as f:
+        for i, item in enumerate(dataset):
+            if i >= 10:
+                break
+            sample = {
+                'id': item['id'],
+                'uid': item['uid'],
+                'summary': item['summary'][:200] + '...' if len(item['summary']) > 200 else item['summary'],
+                'transcript': item['transcript'][:500] + '...' if len(item['transcript']) > 500 else item['transcript']
+            }
+            f.write(json.dumps(sample) + '\n')
+    print(f"Dataset samples saved to {filename}")
 
 def get_dataset(config):
-    raw_dataset = load_dataset('ai4bharat/samanantar', f'{config["lang_tgt"]}', split='train')
+    print(f"Loading dataset: {config['dataset_name']}")
+    meetingbank = load_dataset(config['dataset_name'])
 
-    save_dataset_to_json(raw_dataset)
+    train_raw = meetingbank['train']
+    val_raw = meetingbank['validation']
+    test_raw = meetingbank['test']
 
-    src_tokenizer = get_or_build_tokenizer(config, raw_dataset, config['lang_src'])
-    tgt_tokenizer = get_or_build_tokenizer(config, raw_dataset, config['lang_tgt'])
+    print(f"Train size: {len(train_raw)}, Val size: {len(val_raw)}, Test size: {len(test_raw)}")
 
-    # print(src_tokenizer)
-    # print(tgt_tokenizer)
+    save_dataset_to_json(train_raw)
+    src_tokenizer = get_or_build_tokenizer(config, train_raw, 'transcript')
+    tgt_tokenizer = get_or_build_tokenizer(config, train_raw, 'summary')
 
-    train_dataset_size = int(0.9 * len(raw_dataset))
-    val_dset_size = len(raw_dataset) - train_dataset_size
-    train_dataset, val_dataset = random_split(raw_dataset, [train_dataset_size, val_dset_size]) 
-     
-    train_dataset = BilingualDataset(train_dataset, src_tokenizer, tgt_tokenizer, config['lang_src'], config['lang_tgt'], config['seq_len'])
-    val_dataset = BilingualDataset(val_dataset, src_tokenizer, tgt_tokenizer, config['lang_src'], config['lang_tgt'], config['seq_len'])
+    print(f"Source vocab size: {src_tokenizer.get_vocab_size()}")
+    print(f"Target vocab size: {tgt_tokenizer.get_vocab_size()}")
+
+    from dataset import MeetingSummarizationDataset
+
+    train_dataset = MeetingSummarizationDataset(
+        train_raw,
+        src_tokenizer,
+        tgt_tokenizer,
+        config['max_src_len'],
+        config['max_tgt_len']
+    )
+    val_dataset = MeetingSummarizationDataset(
+        val_raw,
+        src_tokenizer,
+        tgt_tokenizer,
+        config['max_src_len'],
+        config['max_tgt_len']
+    )
 
     max_len_src = 0
     max_len_tgt = 0
 
-    for item in raw_dataset:
-        src_ids = src_tokenizer.encode(item['src']).ids
-        tgt_ids = tgt_tokenizer.encode(item['tgt']).ids
+    print("Calculating max sequence lengths...")
+    for i, item in enumerate(train_raw):
+        if i >= 1000:
+            break
+        src_ids = src_tokenizer.encode(item['transcript']).ids
+        tgt_ids = tgt_tokenizer.encode(item['summary']).ids
         max_len_src = max(max_len_src, len(src_ids))
         max_len_tgt = max(max_len_tgt, len(tgt_ids))
 
-    print(f"Max length of source sentence is: {max_len_src}, and target sentences is: {max_len_tgt}")
+    print(f"Max length of transcript (sampled): {max_len_src}")
+    print(f"Max length of summary (sampled): {max_len_tgt}")
 
     train_dataloader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=True)
@@ -84,11 +115,12 @@ def get_dataset(config):
     return train_dataloader, val_dataloader, src_tokenizer, tgt_tokenizer
 
 def get_model(config, src_vocab_size, tgt_vocab_size):
+    """Build transformer model for meeting summarization."""
     model = build_transformer(
         src_vocab_size=src_vocab_size,
         target_vocab_size=tgt_vocab_size,
-        src_seq_len=config['seq_len'],
-        target_seq_len=config['seq_len']
+        src_seq_len=config['max_src_len'],
+        target_seq_len=config['max_tgt_len']  
     )
 
     return model
