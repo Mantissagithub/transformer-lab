@@ -1,10 +1,10 @@
-import torch 
+import torch
 import torch.nn as nn
 import math
-from feed_forward import FeedForwardNetwork
-from layer_normalization import LayerNormalization
-from residual_connection import ResidualCOnnection
-from multihead_attention import MultiHeadAttentionNetwork
+from utils.feed_forward import FeedForwardNetwork
+from utils.layer_normalization import LayerNormalization
+from utils.residual_connection import ResidualCOnnection
+from multi_head_attention_components.multihead_attention import MultiHeadAttentionNetwork
 
 class DecoderBlock(nn.Module):
     def __init__(self, self_attention_block : MultiHeadAttentionNetwork, cross_attention_block : MultiHeadAttentionNetwork, feed_forward_block : FeedForwardNetwork, dropout : float):
@@ -20,7 +20,7 @@ class DecoderBlock(nn.Module):
         x = self.residual_connection[2](x, self.feed_forward_network)
 
         return x
-    
+
 class Decoder(nn.Module):
     def __init__(self, layers : nn.ModuleList):
         super().__init__()
@@ -31,4 +31,3 @@ class Decoder(nn.Module):
         for layer in self.layers:
             x = layer(x, encoder_output, src_mask, target_mask)
         return self.norm(x)
-    

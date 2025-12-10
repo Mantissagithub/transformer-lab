@@ -1,13 +1,13 @@
 import torch
 import torch.nn as nn
 import math
-from encoder_block import Encoder, EncoderBlock
-from decoder_block import Decoder, DecoderBlock
-from input_embedding import InputEmbeddings
-from positional_encoding import PositionalEncoding
-from projection_layer import ProjectionLayer
-from multihead_attention import MultiHeadAttentionNetwork
-from feed_forward import FeedForwardNetwork
+from multi_head_attention_components.encoder_block import Encoder, EncoderBlock
+from multi_head_attention_components.decoder_block import Decoder, DecoderBlock
+from utils.input_embedding import InputEmbeddings
+from utils.positional_encoding import PositionalEncoding
+from utils.projection_layer import ProjectionLayer
+from multi_head_attention_components.multihead_attention import MultiHeadAttentionNetwork
+from utils.feed_forward import FeedForwardNetwork
 
 class Transformer(nn.Module):
     def __init__(self, encoder : Encoder, decoder : Decoder, src_embed : InputEmbeddings, target_embed : InputEmbeddings, src_pos : PositionalEncoding, target_pos : PositionalEncoding, projection_layer : ProjectionLayer):
@@ -19,12 +19,12 @@ class Transformer(nn.Module):
         self.src_pos = src_pos
         self.target_pos = target_pos
         self.projection_layer = projection_layer
-    
+
     def encode(self, src, src_mask):
         src = self.src_emb(src)
         src = self.src_pos(src)
         return self.encoder(src, src_mask)
-    
+
     def decode(self, encoder_output, src_mask, target, target_mask):
         target = self.target_emb(target)
         target = self.target_pos(target)
@@ -46,7 +46,7 @@ def build_transformer(src_vocab_size : int, target_vocab_size : int, src_seq_len
         encoder_ff = FeedForwardNetwork(d_model_size, d_ff, dropout)
         encoder_block = EncoderBlock(encoder_self_attention_block, encoder_ff, dropout)
         encoder_blocks.append(encoder_block)
-    
+
 
     decoder_blocks = []
     for _ in range(n):

@@ -11,5 +11,4 @@ class ResidualCOnnection(nn.Module):
 
     def forward(self, x, sublayer):
         return x + self.dropout(sublayer(self.norm(x)))
-    
-    
+
