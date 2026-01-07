@@ -11,5 +11,4 @@ class LayerNormalization(nn.Module):
         mean = x.mean(dim=-1, keepdim = True)
         std = x.std(dim=-1, keepdim=True)
 
-        return self.alpha * (x-mean)/(std+self.eps) + self.bias
-    
+        return self.alpha * (x - mean) / (torch.sqrt(std) + self.eps) + self.bias
