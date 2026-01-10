@@ -119,7 +119,14 @@ def get_model(config, src_vocab_size, tgt_vocab_size):
         src_vocab_size=src_vocab_size,
         target_vocab_size=tgt_vocab_size,
         src_seq_len=config['max_src_len'],
-        target_seq_len=config['max_tgt_len']
+        target_seq_len=config['max_tgt_len'],
+        d_model_size=config.get('d_model', 512),
+        d_ff=config.get('d_ff', 2048),
+        h=config.get('h', 8),
+        dropout=config.get('dropout', 0.1),
+        n=config.get('n_layers', 6),
+        use_hyper_connection=config.get('use_hyper_connection', False),
+        hyper_n=config.get('hyper_n', 4)
     )
 
     return model

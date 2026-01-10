@@ -5,18 +5,39 @@ from utils.feed_forward import FeedForwardNetwork
 from utils.layer_normalization import LayerNormalization
 from utils.residual_connection import ResidualCOnnection
 from multi_head_attention_components.multihead_attention import MultiHeadAttentionNetwork
+from utils.hyper_connection import HyperConnection
 
 class EncoderBlock(nn.Module):
-    def __init__(self, self_attention_block : MultiHeadAttentionNetwork, feed_forward_block : FeedForwardNetwork, dropout : float):
+    def __init__(self, self_attention_block : MultiHeadAttentionNetwork, feed_forward_block : FeedForwardNetwork, dropout : float, d_model:int, hyper_n:int=4, use_hyper_connection:bool=False, layer_idx:int=0, device:str='cuda'):
         super().__init__()
         self.self_attention_block = self_attention_block
         self.feed_forward_block = feed_forward_block
         self.residual_connection = nn.ModuleList([ResidualCOnnection(dropout) for _ in range(2)])
+        self.use_hyper_connection = use_hyper_connection
+        if use_hyper_connection:
+            self.connection_1 = HyperConnection(d_model, hyper_n, layer_idx*2, dropout, device)
+            self.connection_2 = HyperConnection(d_model, hyper_n, layer_idx*2+1, dropout, device)
+        else:
+            self.connection_1 = self.residual_connection[0]
+            self.connection_2 = self.residual_connection[1]
 
-    def forward(self, x, src_mask):
-        x = self.residual_connection[0](x, lambda x: self.self_attention_block(x, x, x, src_mask))
-        x = self.residual_connection[1](x, self.feed_forward_block)
-        return x
+    def forward(self, x, src_mask, hyper_hiddens=None):
+        if self.use_hyper_connection:
+            if hyper_hiddens is None:
+                hyper_hiddens = []
+
+            x = self.connection_1(x, lambda x: self.self_attention_block(x, x, x, src_mask), hyper_hiddens)
+            hyper_hiddens.append(x.detach())
+
+            x = self.connection_2(x, self.feed_forward_block, hyper_hiddens)
+            hyper_hiddens.append(x.detach())
+        else:
+            x = self.residual_connection[0](x, lambda x: self.self_attention_block(x, x, x, src_mask))
+            x = self.residual_connection[1](x, self.feed_forward_block)
+
+        return x, hyper_hiddens
+
+
 
 class Encoder(nn.Module):
     def __init__(self, layers: nn.ModuleList):
@@ -25,6 +46,9 @@ class Encoder(nn.Module):
         self.norm = LayerNormalization()
 
     def forward(self, x, src_mask):
+        hyper_hiddens = []
+
         for layer in self.layers:
-            x = layer(x, src_mask)
+            x, hyper_hiddens = layer(x, src_mask, hyper_hiddens)
+
         return self.norm(x)

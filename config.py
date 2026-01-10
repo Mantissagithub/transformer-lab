@@ -10,13 +10,22 @@ def get_config():
         "max_tgt_len": 256,
         "dataset_name": "huuuyeah/meetingbank",
         "model_folder" : "weights",
-        "model_basename": "meeting_model_",
+        "model_basename": "meeting_model_hyperconnection_",
         "preload": None,
         "tokenizer_file": "tokenizers/meetingbank_{}.json",
-        "experiment_name": "meeting_summarization",
+        "experiment_name": "meeting_summarization_hyperconnection",
         "additional_param": "value",
         "vocab_size": 32000,
-        "task": "summarization"
+        "task": "summarization",
+        # Hyper Connection parameters
+        "use_hyper_connection": True,  # Set to True to use HyperConnections instead of residual connections
+        "hyper_n": 4,  # Width of hyper connection (number of previous layer outputs to use)
+        # Transformer architecture parameters
+        "d_model": 512,  # Model dimension
+        "d_ff": 2048,  # Feed-forward dimension
+        "h": 8,  # Number of attention heads
+        "n_layers": 6,  # Number of encoder/decoder layers
+        "dropout": 0.1  # Dropout rate
     }
 
 def get_weights_file_path(config, epoch: str):

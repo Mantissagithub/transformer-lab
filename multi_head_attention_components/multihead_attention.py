@@ -8,6 +8,7 @@ class MultiHeadAttentionNetwork(nn.Module):
     def __init__(self, d_model_size: int, h : int, dropout : float):
         super().__init__()
         self.d_model_size = d_model_size
+        self.d_model = d_model_size  # Add for consistency with hyper connection access
         self.h = h
         assert d_model_size%h == 0, "d_model_size is not divisible by h"
 

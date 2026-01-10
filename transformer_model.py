@@ -33,7 +33,7 @@ class Transformer(nn.Module):
     def project(self, x):
         return self.projection_layer(x)
 
-def build_transformer(src_vocab_size : int, target_vocab_size : int, src_seq_len : int, target_seq_len : int, d_model_size : int = 512, d_ff : int = 2048, h : int = 8, dropout : float = 0.1, n : int = 6) -> Transformer:
+def build_transformer(src_vocab_size : int, target_vocab_size : int, src_seq_len : int, target_seq_len : int, d_model_size : int = 512, d_ff : int = 2048, h : int = 8, dropout : float = 0.1, n : int = 6, use_hyper_connection : bool = False, hyper_n : int = 4) -> Transformer:
     src_embed = InputEmbeddings(d_model_size, src_vocab_size)
     target_embed = InputEmbeddings(d_model_size, target_vocab_size)
 
@@ -41,19 +41,38 @@ def build_transformer(src_vocab_size : int, target_vocab_size : int, src_seq_len
     target_pos = PositionalEncoding(d_model_size, target_seq_len, dropout)
 
     encoder_blocks = []
-    for _ in range(n):
+    for i in range(n):
         encoder_self_attention_block = MultiHeadAttentionNetwork(d_model_size, h, dropout)
         encoder_ff = FeedForwardNetwork(d_model_size, d_ff, dropout)
-        encoder_block = EncoderBlock(encoder_self_attention_block, encoder_ff, dropout)
+        encoder_block = EncoderBlock(
+            encoder_self_attention_block,
+            encoder_ff,
+            dropout,
+            d_model_size,
+            hyper_n,
+            use_hyper_connection,
+            i,
+            'cuda' if torch.cuda.is_available() else 'cpu'
+        )
         encoder_blocks.append(encoder_block)
 
 
     decoder_blocks = []
-    for _ in range(n):
+    for i in range(n):
         decoder_self_attention_block = MultiHeadAttentionNetwork(d_model_size, h, dropout)
         decoder_cross_attetntion_block = MultiHeadAttentionNetwork(d_model_size, h, dropout)
         decoder_ff = FeedForwardNetwork(d_model_size, d_ff, dropout)
-        decoder_block = DecoderBlock(decoder_self_attention_block, decoder_cross_attetntion_block, decoder_ff, dropout)
+        decoder_block = DecoderBlock(
+            decoder_self_attention_block,
+            decoder_cross_attetntion_block,
+            decoder_ff,
+            dropout,
+            d_model_size,
+            hyper_n,
+            use_hyper_connection,
+            i,
+            'cuda' if torch.cuda.is_available() else 'cpu'
+        )
         decoder_blocks.append(decoder_block)
 
     encoder = Encoder(nn.ModuleList(encoder_blocks))
