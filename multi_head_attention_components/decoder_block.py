@@ -16,7 +16,7 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x, encoder_output, src_mask, target_mask):
         x = self.residual_connection[0](x, lambda x: self.self_attention_block(x, x, x, target_mask))
-        x = self.residual_connection[1](x, lambda x: self.cross_attention_block(x, encoder_output, encoder_output, src_mask))
+        x = self.residual_connection[1](x, lambda x: self.cross_attention_block(encoder_output, x, encoder_output, src_mask))
         x = self.residual_connection[2](x, self.feed_forward_network)
 
         return x

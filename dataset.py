@@ -74,8 +74,8 @@ class MeetingSummarizationDataset(Dataset):
         return {
             'encoder_input': encoder_input,
             'decoder_input': decoder_input,
-            'encoder_mask': (encoder_input != self.src_pad_token).unsqueeze(0).unsqueeze(0).int(),
-            'decoder_mask': (decoder_input != self.tgt_pad_token).unsqueeze(0).unsqueeze(0).int() & causal_mask(decoder_input.size(0)),
+            'encoder_mask': (encoder_input != self.src_pad_token).unsqueeze(0).unsqueeze(0).int(),  # (1, 1, src_seq_len) -> broadcastable to (batch, h, tgt_seq_len, src_seq_len)
+            'decoder_mask': (decoder_input != self.tgt_pad_token).unsqueeze(0).int().unsqueeze(0) & causal_mask(decoder_input.size(0)),  # (1, tgt_seq_len, tgt_seq_len) -> broadcastable to (batch, h, tgt_seq_len, tgt_seq_len)
             'label': label,
             'src_text': src_text,
             'tgt_text': tgt_text,

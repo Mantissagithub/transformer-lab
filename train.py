@@ -115,12 +115,11 @@ def get_dataset(config):
     return train_dataloader, val_dataloader, src_tokenizer, tgt_tokenizer
 
 def get_model(config, src_vocab_size, tgt_vocab_size):
-    """Build transformer model for meeting summarization."""
     model = build_transformer(
         src_vocab_size=src_vocab_size,
         target_vocab_size=tgt_vocab_size,
         src_seq_len=config['max_src_len'],
-        target_seq_len=config['max_tgt_len']  
+        target_seq_len=config['max_tgt_len']
     )
 
     return model
@@ -184,6 +183,7 @@ def train_model(config):
             global_step += 1
 
         model_filename = get_weights_file_path(config, f'{epoch:02d}')
+        Path(model_filename).parent.mkdir(parents=True, exist_ok=True)
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-from layer_normalization import LayerNormalization
+from .layer_normalization import LayerNormalization
 
 class ResidualCOnnection(nn.Module):
     def __init__(self, dropout : float):
