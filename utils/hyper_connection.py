@@ -1,115 +1,89 @@
-# this is referred from this paper: https://arxiv.org/pdf/2409.19606
-# and i have a good summarized writing on this one too: https://www.pradheep.dev/hc
-
-# so there are 3 weight matrices over here: w(beta), w(m), and w(r)
-# and also matrices like this
-# Matrix Equation:
-#  ⎛  0_{1×1} B^k ⎞     ⎛  0_{1×1} 1_{1×n}  ⎞
-#  ⎜              |  =  |                   ⎟
-#  ⎝  A_m^k A_r^k ⎠     ⎝  e_kmodn e_{n×n}  ⎠
-
-# this is to basically replace residual connections, so need to decide the n too, like the widht and height of the connection, so that i can replicate the incoming features axccoridngly ad multiply with these and get the result
-# H = norm(H) (10)
-# B(H) = sβ ◦ tanh(HWβ)⊺ + B ∈ R1×n
-# Am(H) = sα ◦ tanh(HWm) + Am ∈ R n×1
-# Ar(H) = sα ◦ tanh(HWr) + Ar ∈ R n×n
+# hyper_connection.py
+# implementation based on algorithm 2 from appendix J of https://arxiv.org/pdf/2409.19606
+# this maintains a hyper hidden matrix (batch, seq, n, dim) and mixes across width/depth
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 class HyperConnection(nn.Module):
-    def __init__(self, input_dim, n, layer_idx=0, dropout=0.1, device='cuda'):
-        super(HyperConnection, self).__init__()
+    def __init__(self, input_dim, n, layer_idx=0, dropout=0.1, dynamic=True, device='cuda'):
+        super().__init__()
         self.input_dim = input_dim
-        self.n = n
+        self.n = n  # rate in paper - number of parallel streams
         self.layer_idx = layer_idx
         self.device = device
         self.dropout = nn.Dropout(dropout)
+        self.dynamic = dynamic
 
-        # weight matrices
-        self.W_beta = nn.Parameter(torch.Tensor(input_dim, n))
-        self.W_m = nn.Parameter(torch.Tensor(input_dim, n))
-        self.W_r = nn.Parameter(torch.Tensor(input_dim, n))
+        # static beta: weights for depth connection, initialized to ones
+        self.static_beta = nn.Parameter(torch.ones(n, device=device))
 
-        # scaling parameters
-        self.s_beta = nn.Parameter(torch.Tensor(1, n))
-        self.s_alpha = nn.Parameter(torch.Tensor(n, 1))
+        # static alpha: weights for width connection
+        # shape (n, n+1) = [e_k | I_n] where e_k is one-hot at layer_idx % n
+        init_alpha0 = torch.zeros((n, 1), device=device)
+        init_alpha0[layer_idx % n, 0] = 1.0
+        self.static_alpha = nn.Parameter(
+            torch.cat([init_alpha0, torch.eye(n, device=device)], dim=1)
+        )
 
-        # bias terms
-        self.B = nn.Parameter(torch.Tensor(1, n))
-        self.A_m = nn.Parameter(torch.Tensor(n, 1))
-        self.A_r = nn.Parameter(torch.Tensor(n, n))
+        if dynamic:
+            # dynamic modulation parameters - start small to not break initialization
+            self.dynamic_alpha_fn = nn.Parameter(torch.zeros(input_dim, n+1, device=device))
+            self.dynamic_alpha_scale = nn.Parameter(torch.ones(1, device=device) * 0.01)
+            self.dynamic_beta_fn = nn.Parameter(torch.zeros(input_dim, n, device=device))
+            self.dynamic_beta_scale = nn.Parameter(torch.ones(1, device=device) * 0.01)
+            self.layer_norm = nn.LayerNorm(input_dim)
 
-        self.reset_parameters()
+    def width_connection(self, h):
+        batch, seq, n, dim = h.shape
 
-    def initialize_weights(self):
-        # according to the paper, the weights are initialized as 0
-        nn.init.zeros_(self.W_beta)
-        nn.init.zeros_(self.W_m)
-        nn.init.zeros_(self.W_r)
+        # compute alpha for width mixing
+        if self.dynamic:
+            # normalize and average across width dimension to get global context
+            norm_h = self.layer_norm(h)  # (b, s, n, d)
+            norm_h_mean = norm_h.mean(dim=2)  # (b, s, d)
 
-        # and the other a, b things are intilized according to the above matrix in comments
-        # B^k -> 1_{1×n}
-        nn.init.ones_(self.B)
+            # compute dynamic alpha adjustment
+            wc_weight = norm_h_mean @ self.dynamic_alpha_fn  # (b, s, n+1)
+            wc_weight = torch.tanh(wc_weight)
+            dynamic_alpha = wc_weight * self.dynamic_alpha_scale
+            alpha = dynamic_alpha.unsqueeze(2) + self.static_alpha  # (b, s, n, n+1)
+        else:
+            alpha = self.static_alpha.unsqueeze(0).unsqueeze(0)  # (1, 1, n, n+1)
 
-        # A_m^k -> e_kmodn
-        with torch.no_grad():
-            self.A_m.zero_()
-            k_idx = self.layer_idx % self.n
-            self.A_m[k_idx, 0] = 1.0
+        # compute beta for depth mixing
+        if self.dynamic:
+            dc_weight = norm_h_mean @ self.dynamic_beta_fn  # (b, s, n)
+            dc_weight = torch.tanh(dc_weight)
+            dynamic_beta = dc_weight * self.dynamic_beta_scale
+            beta = dynamic_beta + self.static_beta  # (b, s, n)
+        else:
+            beta = self.static_beta.unsqueeze(0).unsqueeze(0)  # (1, 1, n)
 
-        # A_r^k -> e_{n×n}
-        with torch.no_grad():
-            nn.init.eye_(self.A_r) # the eye is the identity matrix
+        # width connection: mix_h = alpha^T @ h
+        # alpha is (b, s, n, n+1), h is (b, s, n, d) -> want (b, s, n+1, d)
+        mix_h = torch.einsum('bsni,bsnd->bsid', alpha, h)  # (b, s, n+1, d)
 
-        nn.init.ones_(self.s_beta)
-        nn.init.ones_(self.s_alpha)
+        return mix_h, beta
 
-    def reset_parameters(self):
-        self.initialize_weights()
+    def depth_connection(self, mix_h, h_o, beta):
+        # h = h_o * beta + mix_h[:, :, 1:, :]
+        # einsum: h_o is (b, s, d), beta is (b, s, n) -> (b, s, n, d)
+        h = torch.einsum("bsd,bsn->bsnd", h_o, beta) + mix_h[:, :, 1:, :]
+        return h
 
-    def prepare_hyper_hiddens(self, hyper_hiddens, batch_size, seq_len):
-        selected = hyper_hiddens[-self.n:] if len(hyper_hiddens) >= self.n else list(hyper_hiddens)
+    def forward(self, h, sublayer_fn):
+        # width connection extracts branch input and computes mixing weights
+        mix_h, beta = self.width_connection(h)  # mix_h: (b, s, n+1, d), beta: (b, s, n)
 
-        while len(selected) < self.n:
-            # basically need to pad them with zeroes
-            selected.insert(0, torch.zeros(batch_size, seq_len, self.input_dim, device=self.device))
+        # first slice of mix_h is the input to current layer
+        branch_input = mix_h[:, :, 0, :]  # (b, s, d)
 
-        stacked = torch.stack(selected, dim=0)
+        # apply sublayer (attention or ffn) to branch input
+        h_o = self.dropout(sublayer_fn(branch_input))  # (b, s, d)
 
-        stacked = stacked.permute(1, 2, 0, 3).contiguous()
-        stacked = stacked.view(batch_size * seq_len, self.n, self.input_dim)
+        # depth connection: add back output and advance hyper hidden streams
+        h = self.depth_connection(mix_h, h_o, beta)  # (b, s, n, d)
 
-        return stacked
-
-    def forward(self, x, sublayer_fn, hyper_hiddens=None): # here the sublayer function can be anything like attetion or ffn
-        batch_size, seq_len, dim = x.size()
-
-        sublayer_output = self.dropout(sublayer_fn(x))
-
-        if hyper_hiddens is None or len(hyper_hiddens) == 0:
-            return x + sublayer_output # normal residual connection
-
-        hyper_stack = self.prepare_hyper_hiddens(hyper_hiddens, batch_size, seq_len)
-
-        H_bar = hyper_stack.mean(dim=1)
-        H_bar = F.layer_norm(H_bar, [dim])
-
-        B_H = self.s_beta * torch.tanh(H_bar @ self.W_beta) + self.B
-
-        A_m_H = self.s_alpha.T * torch.tanh(H_bar @ self.W_m) + self.A_m.T
-
-        H_global = H_bar.mean(dim=0, keepdim=True)
-        A_r_H = self.s_alpha * torch.tanh(H_global @ self.W_r).T + self.A_r
-
-        hyper_contribution = torch.einsum('bn,bnd->bd', B_H, hyper_stack)
-
-        depth_contribution = torch.einsum('nm,bmd->bnd', A_r_H, hyper_stack)
-        depth_contribution = depth_contribution.sum(dim=1)
-
-        hyper_contribution = hyper_contribution.view(batch_size, seq_len, dim)
-        depth_contribution = depth_contribution.view(batch_size, seq_len, dim)
-
-        return x + sublayer_output + hyper_contribution + depth_contribution
+        return h

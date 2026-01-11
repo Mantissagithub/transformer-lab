@@ -82,8 +82,11 @@ def build_transformer(src_vocab_size : int, target_vocab_size : int, src_seq_len
 
     transformer = Transformer(encoder, decoder, src_embed, target_embed, src_pos, target_pos, projection_layer)
 
-    for p in transformer.parameters():
+    for name, p in transformer.named_parameters():
         if p.dim() > 1:
+            # skip hyperconnection parameters - they have special initialization
+            if 'hc_' in name or any(x in name for x in ['static_alpha', 'static_beta', 'dynamic_alpha', 'dynamic_beta']):
+                continue
             nn.init.xavier_uniform_(p)
 
     return transformer

@@ -142,8 +142,11 @@ def train_model(config):
 
     writer = SummaryWriter(log_dir=f"runs/{config['experiment_name']}")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
+    muon_params = [p for p in model.parameters() if p.dim() == 2]
+    other_params = [p for p in model.parameters() if p.dim() != 2]
 
+    muon_optimizer = torch.optim.Muon(muon_params, lr=config.get('lr', 1e-4), weight_decay=config.get('weight_decay', 0.01))
+    other_optimizer = torch.optim.AdamW(other_params, lr=config.get('lr', 1e-4), weight_decay=config.get('weight_decay', 0.01))
 
     initial_epoch = 0
     global_step = 0
@@ -152,7 +155,8 @@ def train_model(config):
         print(f"Loading model from {model_filename}")
         state = torch.load(model_filename)
         initial_epoch = state['epoch'] + 1
-        optimizer.load_state_dict(state['optimizer'])
+        muon_optimizer.load_state_dict(state['muon_optimizer'])
+        other_optimizer.load_state_dict(state['other_optimizer'])
         global_step = state['global_step']
 
     loss_fn = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1)
@@ -170,7 +174,8 @@ def train_model(config):
             # src_mask = causal_mask(src.shape[1], device=device).to(device)
             # tgt_mask = causal_mask(tgt.shape[1], device=device).to(device)
 
-            optimizer.zero_grad()
+            muon_optimizer.zero_grad()
+            other_optimizer.zero_grad()
 
             encoder_output = model.encode(src, encoder_mask)
             decoder_output = model.decode(encoder_output, encoder_mask, tgt, decoder_mask)
@@ -184,8 +189,33 @@ def train_model(config):
 
             loss.backward()
 
-            optimizer.step()
-            optimizer.zero_grad()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # gradient clipping -> to avoid exploding gradients
+
+            # if global_step % 100 == 0:
+            #     total_grad = 0.0
+            #     hc_grad = 0.0
+            #     for name, p in model.named_parameters():
+            #         if p.grad is not None:
+            #             grad_norm = p.grad.data.norm(2).item()
+            #             total_grad += grad_norm ** 2
+
+            #             # updated: check for new HC param names
+            #             if 'hc_' in name or any(x in name for x in ['static_alpha', 'static_beta', 'dynamic_alpha', 'dynamic_beta']):
+            #                 hc_grad += grad_norm ** 2
+
+                # print(f"Step {global_step}: Total Grad Norm: {total_grad**0.5:.4f}, HyperConnection Grad Norm: {hc_grad**0.5:.4f}")
+
+                # for name, module in model.name_modules():
+                #     if isinstance(module, HyperConnection):
+                #         print(f"Step {global_step}: HyperConnection Layer {name} params:")
+                #         print(f"  W_beta norm: {module.W_beta.data.norm(2).item():.4f}")
+                #         print(f"  B norm: {module.B.data.norm(2).item():.4f}")
+
+            muon_optimizer.step()
+            other_optimizer.step()
+
+            muon_optimizer.zero_grad()
+            other_optimizer.zero_grad()
 
             global_step += 1
 
@@ -194,7 +224,8 @@ def train_model(config):
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
+            'muon_optimizer': muon_optimizer.state_dict(),
+            'other_optimizer': other_optimizer.state_dict(),
             'global_step': global_step
         }, model_filename)
 
