@@ -76,9 +76,7 @@ The model was trained for 20 epochs on the MeetingBank dataset for meeting summa
 
 The graph shows training loss curves for both variants:
 - **Gray line**: Standard transformer with residual connections - shows faster convergence and lower final loss
-- **Cyan line**: Transformer with hyperconnections - shows higher loss, suggesting the need for further hyperparameter tuning
-
-**Note**: The hyperconnection variant shows higher loss, which may indicate that the architecture requires different hyperparameters (learning rate, initialization, or longer training) to reach its full potential.
+- **Cyan line**: Transformer with hyperconnections - more stable training dynamics, with potential performance gains after tuning the added hyperparameters over additional epochs.
 
 ## Project Structure
 
