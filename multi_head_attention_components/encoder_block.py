@@ -7,9 +7,10 @@ from utils.layer_normalization import LayerNormalization
 from utils.residual_connection import ResidualCOnnection
 from multi_head_attention_components.multihead_attention import MultiHeadAttentionNetwork
 from utils.hyper_connection import HyperConnection
+from utils.mhc import ManifoldConstrainedHyperConnection
 
 class EncoderBlock(nn.Module):
-    def __init__(self, self_attention_block : MultiHeadAttentionNetwork, feed_forward_block : FeedForwardNetwork, dropout : float, d_model:int, hyper_n:int=4, use_hyper_connection:bool=False, layer_idx:int=0, device:str='cuda'):
+    def __init__(self, self_attention_block : MultiHeadAttentionNetwork, feed_forward_block : FeedForwardNetwork, dropout : float, d_model:int, hyper_n:int=4, use_hyper_connection:bool=True, layer_idx:int=0, device:str='cuda'):
         super().__init__()
         self.self_attention_block = self_attention_block
         self.feed_forward_block = feed_forward_block
@@ -18,8 +19,8 @@ class EncoderBlock(nn.Module):
         self.hyper_n = hyper_n
 
         if use_hyper_connection:
-            self.hc_attention = HyperConnection(d_model, hyper_n, layer_idx*2, dropout, dynamic=True, device=device)
-            self.hc_ffn = HyperConnection(d_model, hyper_n, layer_idx*2+1, dropout, dynamic=True, device=device)
+            self.hc_attention = ManifoldConstrainedHyperConnection(d_model, hyper_n, layer_idx*2, dropout, dynamic=True, device=device)
+            self.hc_ffn = ManifoldConstrainedHyperConnection(d_model, hyper_n, layer_idx*2+1, dropout, dynamic=True, device=device)
         else:
             self.residual_connection = nn.ModuleList([ResidualCOnnection(dropout) for _ in range(2)])
             self.norm_1 = LayerNormalization()
