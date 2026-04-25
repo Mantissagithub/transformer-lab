@@ -1,0 +1,10 @@
+name: meetingbank
+hf_path: huuuyeah/meetingbank
+tokenizer_dir: tokenizers
+tokenizer_basename: meetingbank
+vocab_size: 32000
+max_src_len: 512
+max_tgt_len: 256
+val_batch_size: 1
+num_workers: 0
+limit: 0

@@ -1,0 +1,8 @@
+d_model: 512
+d_ff: 2048
+n_layers: 6
+dropout: 0.1
+max_src_len: 512
+max_tgt_len: 256
+src_vocab_size: 32000
+tgt_vocab_size: 32000

@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - override /connection: residual
+  - override /optimizer: adamw
+
+experiment_name: meeting_summarization_residual
+training:
+  ckpt_basename: meeting_model_residual

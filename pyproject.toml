@@ -1,0 +1,30 @@
+[project]
+name = "transformer-research"
+version = "0.1.0"
+description = "Plug-and-play transformer research framework with Hydra config groups."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "datasets",
+    "tokenizers",
+    "tensorboard",
+    "tqdm",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+neptune = ["neptune", "neptune-tensorboard"]
+dev = ["pytest"]
+
+[project.scripts]
+train = "src.cli.train:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

@@ -1,0 +1,3 @@
+name: linear_warmup
+warmup_steps: 1000
+min_lr_ratio: 0.0

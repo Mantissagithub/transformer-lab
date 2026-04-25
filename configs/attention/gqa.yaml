@@ -1,0 +1,4 @@
+name: gqa
+n_heads: 8
+n_kv_heads: 2
+bias: true

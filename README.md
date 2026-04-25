@@ -1,124 +1,128 @@
-# Transformer from Scratch
+# Transformer Research Framework
 
-A complete implementation of the Transformer architecture from scratch using PyTorch, based on the paper ["Attention is All You Need"](https://arxiv.org/abs/1706.03762) by Vaswani et al.
+A plug-and-play PyTorch transformer where attention, FFN, normalization, positional encoding, residual style, optimizer, scheduler, loss, and dataset are all swappable via Hydra config groups. Add a new component by writing one class with a `@register` decorator and one YAML — no edits to the trainer or model builder.
 
-## Overview
+## Why this exists
 
-This project implements a full-featured Transformer model for sequence-to-sequence tasks, specifically trained for meeting summarization using the MeetingBank dataset.
+Originally a hand-rolled transformer for meeting summarization with three connection variants (residual / HyperConnection / MHC), toggled via a Python dict. Swapping anything else meant editing several files. This rewrite makes the base composable: an experiment is one YAML, every component is replaceable, and the trainer is component-agnostic.
 
 ## Architecture
 
-The implementation follows the original Transformer architecture with the following components:
+```
+configs/
+  config.yaml                # top-level Hydra entry with `defaults:` list
+  model/                     # base model dimensions
+  attention/                 # mha, gqa, mqa, sliding_window
+  feedforward/               # relu_ffn, swiglu, geglu
+  normalization/             # layernorm, rmsnorm
+  positional/                # sinusoidal, rope, alibi
+  connection/                # residual, hyperconnection, mhc
+  optimizer/                 # adamw, muon_adamw, lion, adafactor
+  scheduler/                 # none, cosine_warmup, linear_warmup
+  loss/                      # cross_entropy
+  data/                      # meetingbank
+  logging/                   # tensorboard, neptune
+  experiment/                # composable experiment recipes
 
-### Core Components
-
-- **Multi-Head Attention**: Self-attention mechanism with 8 attention heads
-- **Encoder-Decoder Structure**: 6 layers each for encoder and decoder
-- **Feed-Forward Networks**: Position-wise feed-forward layers (d_model=512, d_ff=2048)
-- **Positional Encoding**: Sinusoidal positional embeddings
-- **Input Embeddings**: Learned token embeddings for source and target sequences
-- **Layer Normalization**: Applied throughout the network
-- **Residual Connections**: Standard skip connections for stable training
-
-### Model Parameters
-
-- **d_model**: 512 (model dimension)
-- **d_ff**: 2048 (feed-forward dimension)
-- **h**: 8 (number of attention heads)
-- **n_layers**: 6 (encoder/decoder layers)
-- **dropout**: 0.1
-- **vocab_size**: 32,000 tokens
-- **max_src_len**: 512 tokens
-- **max_tgt_len**: 256 tokens
-
-## HyperConnections Enhancements
-
-In addition to the standard architecture, this implementation includes two experimental variants that enhance information flow through the network:
-
-### 1. HyperConnections
-
-Based on the research paper ["HyperConnections"](https://arxiv.org/pdf/2409.19606) (Appendix J, Algorithm 2).
-
-HyperConnections replace standard residual connections with a more sophisticated mechanism that:
-
-1. **Maintains a Hyper Hidden Matrix**: Instead of a single hidden state, maintains `(batch, seq, n, dim)` where `n` is the number of parallel streams
-2. **Width Mixing**: Combines information across multiple parallel streams using learned attention weights
-3. **Depth Connection**: Aggregates information from previous layers with dynamic weighting
-4. **Dynamic Modulation**: Adapts connection weights based on the current hidden state
-
-**Key Features:**
-- **Static and Dynamic Weights**: Combines fixed architectural priors with learned dynamic adjustments
-- **Multi-Stream Processing**: Maintains `n=4` parallel streams for richer information flow
-- **Layer-wise Adaptation**: Each layer can learn different mixing strategies
-
-### 2. Manifold Constrained HyperConnections (MHC)
-
-Based on the research paper ["Manifold Constrained HyperConnections"](https://www.arxiv.org/pdf/2512.24880).
-
-Manifold Constrained HyperConnections enhance the original hyperconnections with additional constraints:
-
-1. **Sinkhorn-Knopp Normalization**: Applies doubly stochastic constraint on attention weights using iterative Sinkhorn-Knopp algorithm
-2. **Manifold Constraints**: Ensures connection weights lie on a specific manifold for better optimization
-3. **Improved Stability**: More controlled information flow through constrained weight matrices
-
-**Key Features:**
-- **Doubly Stochastic Matrices**: Width connection weights are normalized to sum to 1 along both dimensions
-- **Better Convergence**: Manifold constraints lead to more stable training dynamics
-- **Superior Performance**: Achieves dramatically lower perplexity compared to unconstrained variants
-
-### Configuration
-
-Toggle between different connection types in `config.py`:
-
-```python
-"use_hyper_connection": True,  # Enable HyperConnections or Manifold Constrained HyperConnections and chnage it in encoder_block.py and decoder_block.py
-"hyper_n": 4,                 # Number of parallel streams
+src/
+  registry.py                # name -> class lookup for every component kind
+  components/                # all swappable parts; @register decorators run at import
+  model/                     # generic blocks, encoder, decoder, transformer, builder
+  training/                  # trainer, logging, checkpoint
+  cli/train.py               # @hydra.main entrypoint
 ```
 
-## Training Results
+The keystone is the **Connection abstraction** (`src/components/connections/base.py`). Every connection (residual / HC / MHC) implements `init_state(x)`, `apply(state, sublayer_fn)`, `to_output(state)`. Blocks are state-shape-agnostic — the same block code runs whether the state is `(b, s, d)` (residual) or `(b, s, n, d)` (hyper variants).
 
-The model was trained for 20 epochs on the MeetingBank dataset for meeting summarization:
+## Install
 
-### Training Comparison
-
-| Model Variant | Final Loss (Smoothed) | Final Loss (Value) | Training Time | Perplexity |
-|---------------|----------------------|-------------------|---------------|------------|
-| Standard (Residual) | 1.6813 | 1.6214 | 1.005 hr | - |
-| HyperConnections | 5.0862 | 5.4011 | 1.641 hr | 6,552,458,104.53 |
-| **MHC (Winner)** | **6.6997** | **6.6715** | **1.722 hr** | **553.86** |
-
-### Final Perplexity Results
-
-```
-FINAL RESULTS:
-----------------------------------------
-hyperconnection: 6552458104.5271
-mhc            : 553.8611
-
-WINNER: mhc (ppl=553.8611)
+```bash
+pip install -e .
+# optional
+pip install -e .[neptune,dev]
 ```
 
-The Manifold Constrained HyperConnections (MHC) variant achieves dramatically superior perplexity compared to the unconstrained hyperconnections, demonstrating the benefit of manifold constraints for stable and effective training.
+## Run
 
-### Loss Curves
+The base config trains a residual / AdamW transformer on MeetingBank:
 
-![Training Loss Comparison](assets/lc_mhc.png)
+```bash
+python -m src.cli.train
+```
 
-The graph shows training loss curves for all three variants:
-- **Gray line**: Standard transformer with residual connections - shows fastest initial convergence
-- **Cyan line**: Transformer with hyperconnections - exhibits training instability
-- **Magenta line**: Transformer with manifold constrained hyperconnections (MHC) - achieves the best final perplexity with stable training dynamics
+Compose an experiment that's already wired up (reproduces the previous best run):
 
-## Dataset
+```bash
+python -m src.cli.train +experiment=meeting_summarization_mhc
+```
 
-This implementation uses the [MeetingBank dataset](https://huggingface.co/datasets/huuuyeah/meetingbank) for meeting summarization:
-- **Task**: Summarize meeting transcripts
-- **Source**: Meeting transcripts (up to 512 tokens)
-- **Target**: Meeting summaries (up to 256 tokens)
+Override anything inline — Hydra picks the right group:
+
+```bash
+python -m src.cli.train \
+  attention=gqa \
+  feedforward=swiglu \
+  normalization=rmsnorm \
+  positional=rope \
+  connection=mhc \
+  optimizer=lion \
+  scheduler=cosine_warmup \
+  training.lr=3e-4
+```
+
+Run a fast sanity pass on CPU:
+
+```bash
+python -m src.cli.train training.num_epochs=1 data.limit=64
+```
+
+## Adding a new component
+
+Adding a new attention mechanism (the recipe is identical for FFN, norm, positional, connection, optimizer, scheduler, loss, dataset):
+
+1. Write the class in `src/components/attention/my_attn.py`. Inherit from `AttentionBase`. Decorate with `@ATTENTION.register("my_attn")`.
+2. Make sure the package's `__init__.py` imports your module so the decorator runs at import time.
+3. Add `configs/attention/my_attn.yaml` with at least `name: my_attn` plus any kwargs.
+4. Use it: `python -m src.cli.train attention=my_attn`.
+
+That's the whole loop. No trainer / builder / block edits.
+
+## Logging
+
+TensorBoard by default — runs land in `runs/<experiment_name>/`. To use Neptune, set `logging=neptune` and provide `NEPTUNE_API_TOKEN` via environment:
+
+```bash
+NEPTUNE_API_TOKEN=… python -m src.cli.train logging=neptune
+```
+
+The previous implementation had a hardcoded API token. That has been removed; tokens must come from the environment.
+
+## Tests
+
+```bash
+pytest tests/ -q
+```
+
+The suite covers (a) every registered component instantiating from its YAML defaults, (b) `init_state -> apply -> to_output` round-trips for every connection, (c) encoder/decoder block output shapes for every connection, and (d) a full builder smoke matrix that mixes attentions × FFNs × norms × connections to confirm arbitrary swaps compose without code edits.
+
+## What's shipping in this version
+
+- **Attention**: `mha`, `gqa`, `mqa`, `sliding_window`
+- **FFN**: `relu_ffn`, `swiglu`, `geglu`
+- **Norm**: `layernorm` (fixed `sqrt(std)` bug from the original — was `(x - mean) / (sqrt(std) + eps)`, now correctly `(x - mean) / (std + eps)`), `rmsnorm`
+- **Positional**: `sinusoidal` (fixed `100000` → `10000` constant from the original paper), `rope`, `alibi`
+- **Connection**: `residual`, `hyperconnection`, `mhc`
+- **Optimizer**: `adamw`, `muon_adamw` (2D params → Muon if available else AdamW; rest → AdamW), `lion`, `adafactor`
+- **Scheduler**: `none`, `cosine_warmup`, `linear_warmup`
+- **Loss**: `cross_entropy` (label smoothing + ignore_index from cfg)
+- **Dataset**: `meetingbank`
+
+## Out of scope (deliberately)
+
+MoE, distributed training, beam-search inference. The base is structured so they can be added the same way as everything else — write a class, register it, drop a YAML.
 
 ## References
 
-1. Vaswani, A., et al. (2017). ["Attention is All You Need"](https://arxiv.org/abs/1706.03762)
-2. HyperConnections Paper: [https://arxiv.org/pdf/2409.19606](https://arxiv.org/pdf/2409.19606)
-3. Manifold Constrained HyperConnections: [https://www.arxiv.org/pdf/2512.24880](https://www.arxiv.org/pdf/2512.24880)
-
+1. Vaswani et al. (2017). ["Attention is All You Need"](https://arxiv.org/abs/1706.03762)
+2. HyperConnections — https://arxiv.org/pdf/2409.19606
+3. Manifold Constrained HyperConnections — https://www.arxiv.org/pdf/2512.24880

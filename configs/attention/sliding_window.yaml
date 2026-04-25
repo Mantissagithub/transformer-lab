@@ -1,0 +1,4 @@
+name: sliding_window
+n_heads: 8
+window_size: 128
+bias: true

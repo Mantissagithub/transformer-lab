@@ -1,0 +1,3 @@
+name: rope
+base: 10000.0
+dropout: 0.1

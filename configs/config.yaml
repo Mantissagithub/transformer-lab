@@ -1,0 +1,31 @@
+defaults:
+  - model: transformer_base
+  - attention: mha
+  - feedforward: relu_ffn
+  - normalization: layernorm
+  - positional: sinusoidal
+  - connection: residual
+  - optimizer: adamw
+  - scheduler: none
+  - loss: cross_entropy
+  - data: meetingbank
+  - logging: tensorboard
+  - _self_
+
+seed: 42
+
+experiment_name: default
+
+training:
+  num_epochs: 20
+  batch_size: 8
+  lr: 1e-4
+  weight_decay: 0.01
+  grad_clip: 0.0
+  ckpt_dir: weights
+  ckpt_basename: meeting_model
+  preload: null
+
+hydra:
+  run:
+    dir: outputs/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}

@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - override /connection: mhc
+  - override /optimizer: muon_adamw
+
+experiment_name: meeting_summarization_mhc
+training:
+  ckpt_basename: meeting_model_mhc
