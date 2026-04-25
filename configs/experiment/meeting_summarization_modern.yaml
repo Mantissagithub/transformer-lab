@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - override /model: transformer_modern
+  - override /attention: gemma3_hybrid
+  - override /feedforward: swiglu
+  - override /normalization: rmsnorm
+  - override /positional: rope_nope_hybrid
+  - override /connection: residual_sandwich
+
+experiment_name: meeting_summarization_modern
+training:
+  ckpt_basename: meeting_model_modern

@@ -1,0 +1,5 @@
+name: sliding_gqa
+n_heads: 8
+n_kv_heads: 2
+window_size: 128
+bias: false

@@ -1,0 +1,4 @@
+name: rope
+base: 10000.0
+dropout: 0.0
+skip_every_n: 4

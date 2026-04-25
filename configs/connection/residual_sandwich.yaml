@@ -1,0 +1,4 @@
+name: residual
+dropout: 0.0
+norm: rmsnorm
+post_norm: true

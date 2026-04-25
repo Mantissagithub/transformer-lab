@@ -32,6 +32,22 @@ def test_encoder_block(name: str) -> None:
     assert out.shape == (B, S, D)
 
 
+def test_encoder_block_residual_sandwich() -> None:
+    attn = MultiHeadAttention(d_model=D, n_heads=H, dropout=0.0)
+    ffn = ReluFeedForward(d_model=D, d_ff=64, dropout=0.0)
+    conns = [
+        CONNECTION.build("residual", d_model=D, dropout=0.0, norm="rmsnorm", post_norm=True)
+        for _ in range(2)
+    ]
+    block = EncoderBlock(attn, ffn, conns)
+    x = torch.randn(B, S, D)
+    state = block.connections[0].init_state(x)
+    state = block(state, src_mask=None)
+    out = block.connections[0].to_output(state)
+    assert out.shape == (B, S, D)
+    assert all(c.post_norm_module is not None for c in block.connections)
+
+
 @pytest.mark.parametrize("name", CONNECTION.names())
 def test_decoder_block(name: str) -> None:
     self_attn = MultiHeadAttention(d_model=D, n_heads=H, dropout=0.0)

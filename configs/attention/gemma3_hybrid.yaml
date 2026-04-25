@@ -1,0 +1,19 @@
+name: gemma3_hybrid
+n_heads: 12
+pattern:
+  - sliding_gqa
+  - sliding_gqa
+  - sliding_gqa
+  - sliding_gqa
+  - sliding_gqa
+  - gqa_rope
+layers:
+  sliding_gqa:
+    n_heads: 12
+    n_kv_heads: 4
+    window_size: 1024
+    bias: false
+  gqa_rope:
+    n_heads: 12
+    n_kv_heads: 4
+    bias: false

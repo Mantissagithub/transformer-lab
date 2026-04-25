@@ -1,0 +1,9 @@
+d_model: 768
+d_ff: 2048
+n_layers: 12
+dropout: 0.0
+max_src_len: 2048
+max_tgt_len: 512
+src_vocab_size: 32000
+tgt_vocab_size: 32000
+tie_embeddings: true
