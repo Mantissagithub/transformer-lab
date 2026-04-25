@@ -4,3 +4,6 @@ tokenizers
 *.pt
 test.py
 meetingbank_dataset.json
+.env
+outputs/
+runs/

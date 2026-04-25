@@ -1,8 +1,3 @@
-"""RoPE is actually wired into attention.
-
-The previous codebase shipped an `apply_rope` helper that no attention module ever called,
-so selecting `positional: rope` silently produced un-rotated Q/K. These tests pin the fix.
-"""
 import torch
 
 from src.components.attention.gqa_rope import GroupedQueryAttentionRoPE

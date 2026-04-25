@@ -25,6 +25,12 @@ training:
   ckpt_dir: weights
   ckpt_basename: meeting_model
   preload: null
+  tui: true
+  hf:
+    push: false
+    repo_id: null            # falls back to HF_REPO_ID env var
+    private: false
+    commit_message: null     # auto-generated from experiment_name if null
 
 hydra:
   run:
