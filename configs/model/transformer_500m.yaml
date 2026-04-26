@@ -1,0 +1,9 @@
+kind: causal_lm
+d_model: 1024
+d_ff: 4096
+n_layers: 32
+dropout: 0.0
+max_seq_len: 2048
+src_vocab_size: 32000
+tgt_vocab_size: 32000
+tie_embeddings: true

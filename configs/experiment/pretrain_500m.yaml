@@ -1,0 +1,43 @@
+# @package _global_
+defaults:
+  - override /model: transformer_500m
+  - override /attention: gqa_rope
+  - override /feedforward: swiglu
+  - override /normalization: rmsnorm
+  - override /positional: rope
+  - override /connection: residual
+  - override /optimizer: adamw
+  - override /scheduler: cosine_warmup
+  - override /data: fineweb_edu
+
+experiment_name: pretrain_500m
+
+attention:
+  n_heads: 16
+  n_kv_heads: 4
+  bias: false
+
+feedforward:
+  d_ff: 4096
+
+scheduler:
+  warmup_steps: 2000
+  min_lr_ratio: 0.1
+
+training:
+  num_epochs: 1
+  batch_size: 8
+  lr: 3e-4
+  weight_decay: 0.1
+  grad_clip: 1.0
+  ckpt_basename: pretrain_500m
+  max_steps: 100000
+  gradient_accumulation_steps: 16
+  precision: bf16
+  compile: false
+  distributed:
+    enabled: false
+    strategy: ddp
+    fsdp:
+      sharding_strategy: full_shard
+      mixed_precision: bf16

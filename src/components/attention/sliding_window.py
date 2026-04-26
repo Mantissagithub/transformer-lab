@@ -32,7 +32,9 @@ class SlidingWindowAttention(AttentionBase):
         j = torch.arange(sk, device=device).unsqueeze(0)
         return ((j - i).abs() <= self.window_size).int().unsqueeze(0).unsqueeze(0)
 
-    def forward(self, q, k, v, mask=None, kv_cache=None):
+    def forward(self, q, k, v, mask=None, past_kv=None, return_kv=False):
+        if past_kv is not None or return_kv:
+            raise NotImplementedError("sliding_window does not support KV cache")
         query = self._split(self.wq(q))
         key = self._split(self.wk(k))
         value = self._split(self.wv(v))

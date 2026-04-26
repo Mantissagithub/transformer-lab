@@ -7,7 +7,13 @@ import torch.nn as nn
 
 
 class AttentionBase(nn.Module):
-    """All attention implementations expose forward(q, k, v, mask, kv_cache=None) -> (b, s, d)."""
+    """All attention implementations expose forward(q, k, v, mask, past_kv=None, return_kv=False).
+
+    With return_kv=False (the default and the only path used by the encoder-decoder
+    trainer) the return is a tensor of shape (b, s, d). With return_kv=True (used by
+    CausalLM.generate) the return is (out, (k, v)) where k, v are the post-projection
+    head-split tensors that should be passed back as past_kv on the next step.
+    """
 
     def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0) -> None:
         super().__init__()
@@ -18,7 +24,7 @@ class AttentionBase(nn.Module):
         self.d_head = d_model // n_heads
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, q, k, v, mask=None, kv_cache=None):  # pragma: no cover - interface
+    def forward(self, q, k, v, mask=None, past_kv=None, return_kv=False):  # pragma: no cover - interface
         raise NotImplementedError
 
 

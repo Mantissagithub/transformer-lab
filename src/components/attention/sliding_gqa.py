@@ -39,7 +39,9 @@ class SlidingGroupedQueryAttention(AttentionBase):
         j = torch.arange(sk, device=device).unsqueeze(0)
         return ((j - i).abs() <= self.window_size).int().unsqueeze(0).unsqueeze(0)
 
-    def forward(self, q, k, v, mask=None, kv_cache=None):
+    def forward(self, q, k, v, mask=None, past_kv=None, return_kv=False):
+        if past_kv is not None or return_kv:
+            raise NotImplementedError("sliding_gqa does not support KV cache")
         b, sq, _ = q.shape
         sk = k.shape[1]
         query = self.wq(q).view(b, sq, self.n_heads, self.d_head).transpose(1, 2)

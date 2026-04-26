@@ -27,10 +27,15 @@ class RotaryPositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+def apply_rope(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    position_offset: int = 0,
+) -> torch.Tensor:
     seq = x.shape[-2]
-    cos = cos[:seq].unsqueeze(0).unsqueeze(0)
-    sin = sin[:seq].unsqueeze(0).unsqueeze(0)
+    cos = cos[position_offset : position_offset + seq].unsqueeze(0).unsqueeze(0)
+    sin = sin[position_offset : position_offset + seq].unsqueeze(0).unsqueeze(0)
     x1, x2 = x[..., 0::2], x[..., 1::2]
     rx1 = x1 * cos - x2 * sin
     rx2 = x1 * sin + x2 * cos

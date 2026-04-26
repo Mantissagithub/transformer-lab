@@ -13,7 +13,8 @@ from src.registry import (
     PROJECTION,
 )
 
-from .blocks import DecoderBlock, EncoderBlock
+from .blocks import CausalBlock, DecoderBlock, EncoderBlock
+from .causal_lm import CausalLM
 from .decoder import Decoder
 from .encoder import Encoder
 from .transformer import Transformer
@@ -157,6 +158,39 @@ def build_transformer(cfg: DictConfig) -> Transformer:
 
     model = Transformer(encoder, decoder, src_embed, tgt_embed, src_pos, tgt_pos, projection)
 
+    _init_parameters(model)
+    return model
+
+
+def build_causal_lm(cfg: DictConfig) -> CausalLM:
+    model_cfg = cfg.model
+    d_model = model_cfg.d_model
+    dropout = model_cfg.dropout
+    n_layers = model_cfg.n_layers
+    n_heads = cfg.attention.get("n_heads", 8)
+    vocab_size = model_cfg.src_vocab_size
+    if model_cfg.tgt_vocab_size != vocab_size:
+        raise ValueError(
+            f"causal LM requires src_vocab_size == tgt_vocab_size, got "
+            f"{vocab_size} != {model_cfg.tgt_vocab_size}"
+        )
+    max_seq_len = model_cfg.get("max_seq_len", model_cfg.get("max_src_len", 2048))
+
+    embed = EMBEDDING.build("learned", vocab_size=vocab_size, d_model=d_model)
+    pos = _build_pos(cfg.positional, d_model, max_seq_len, n_heads)
+
+    blocks = []
+    for i in range(n_layers):
+        rope = _rope_for_layer(cfg.positional, pos, i)
+        attn = _build_attention_for_layer(cfg.attention, i, d_model, dropout, rope)
+        ffn = _build_ffn(cfg.feedforward, d_model, dropout)
+        conns = _build_connections(cfg.connection, d_model, count=2, layer_idx=i)
+        blocks.append(CausalBlock(attn, ffn, conns))
+
+    norm = _build_norm(cfg.normalization, d_model)
+    projection = PROJECTION.build("tied", embedding=embed, log_softmax=False)
+
+    model = CausalLM(embed, pos, nn.ModuleList(blocks), norm, projection)
     _init_parameters(model)
     return model
 
