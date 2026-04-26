@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - override /data: multi_news
+  - override /model: transformer_modern
+  - override /attention: gemma3_hybrid
+  - override /feedforward: swiglu
+  - override /normalization: rmsnorm
+  - override /positional: rope_nope_hybrid
+  - override /connection: residual_sandwich
+  - override /optimizer: muon_adamw
+  - override /scheduler: cosine_warmup
+
+experiment_name: multinews_modern
+training:
+  ckpt_basename: multinews_modern
+  num_epochs: 3
+  batch_size: 4
+  lr: 3e-4

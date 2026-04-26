@@ -1,0 +1,10 @@
+name: multi_news
+hf_path: alexfabbri/multi_news
+tokenizer_dir: tokenizers
+tokenizer_basename: multi_news_bpe
+vocab_size: 32000
+max_src_len: 2048
+max_tgt_len: 512
+val_batch_size: 1
+num_workers: 2
+limit: 0
