@@ -83,7 +83,9 @@ def build_multi_news(
     limit: int = 0,
     **_: object,
 ) -> dict:
-    raw = load_dataset(hf_path)
+    # datasets>=4 dropped legacy-script loaders; alexfabbri/multi_news only ships a script,
+    # so we load HF's auto-converted parquet revision instead.
+    raw = load_dataset(hf_path, revision="refs/convert/parquet")
     train_raw = _maybe_limit(raw["train"], limit)
     val_raw = _maybe_limit(raw["validation"], limit)
 
