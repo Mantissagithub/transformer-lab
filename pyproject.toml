@@ -1,8 +1,10 @@
 [project]
 name = "transformer-research"
 version = "0.1.0"
-description = "Plug-and-play transformer research framework with Hydra config groups."
+description = "Plug-and-play transformer research framework: swappable attention/FFN/norm/positional/connection/optimizer/dataset via Hydra, with encoder-decoder and decoder-only paths."
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["transformer", "pytorch", "hydra", "pretraining", "research"]
 dependencies = [
     "torch>=2.1",
     "datasets",
