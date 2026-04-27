@@ -1,0 +1,5 @@
+backend: wandb
+project: hyperconnections
+# Optional: W&B entity (team or username). Defaults to your default entity.
+# entity: my-team
+# api key must be supplied via WANDB_API_KEY environment variable

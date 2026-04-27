@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 neptune = ["neptune", "neptune-tensorboard"]
+wandb = ["wandb"]
 dev = ["pytest"]
 
 [project.scripts]

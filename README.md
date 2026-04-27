@@ -29,7 +29,7 @@ configs/
   scheduler/                          # none, cosine_warmup, linear_warmup
   loss/                               # cross_entropy
   data/                               # meetingbank, multi_news, fineweb_edu
-  logging/                            # tensorboard, neptune
+  logging/                            # tensorboard, neptune, wandb
   experiment/                         # meeting_summarization_{residual,mhc,modern},
                                       # multinews_modern, pretrain_500m
 
@@ -59,10 +59,10 @@ The keystone is the **Connection abstraction** (`src/components/connections/base
 ```bash
 pip install -e .
 # optional
-pip install -e .[neptune,dev]
+pip install -e .[neptune,wandb,dev]
 ```
 
-`.env` is picked up automatically (via `python-dotenv`) for `HF_TOKEN`, `HF_REPO_ID`, and `NEPTUNE_API_TOKEN`. Copy `.env.example` to `.env` and fill in.
+`.env` is picked up automatically (via `python-dotenv`) for `HF_TOKEN`, `HF_REPO_ID`, `NEPTUNE_API_TOKEN`, and `WANDB_API_KEY`. Copy `.env.example` to `.env` and fill in.
 
 ## Run
 
@@ -150,13 +150,14 @@ That's the whole loop. No trainer / builder / block edits.
 
 **Distributed.** `training.distributed.enabled=true`, with `strategy: ddp | fsdp`. FSDP wraps `CausalBlock` via `transformer_auto_wrap_policy`; sharding ∈ `full_shard | shard_grad_op | hybrid_shard`; mixed precision ∈ `bf16 | fp16`. Launch via `torchrun`; the trainer reads `RANK`, `LOCAL_RANK`, `WORLD_SIZE` from the environment.
 
-**Logging.** TensorBoard by default — runs land in `runs/<experiment_name>/`. To use Neptune, set `logging=neptune` and provide `NEPTUNE_API_TOKEN` via environment:
+**Logging.** TensorBoard by default — runs land in `runs/<experiment_name>/`. At startup, `ensure_logging_backend()` prompts for which tracker to use: (1) tensorboard only, (2) wandb, (3) neptune. Picking wandb/neptune asks for the API key (offering to persist it to `.env`) and the project. Power users can skip the prompt by passing `logging=wandb` or `logging=neptune` on the Hydra command line — the API key is still validated, but the picker is bypassed:
 
 ```bash
 NEPTUNE_API_TOKEN=… python -m src.cli.train logging=neptune
+WANDB_API_KEY=…       python -m src.cli.train logging=wandb
 ```
 
-The previous implementation had a hardcoded API token. That has been removed; tokens must come from the environment.
+The previous implementation had a hardcoded API token. That has been removed; tokens must come from the environment or the startup prompt.
 
 **HF Hub push.** `training.hf.push=true` uploads the last checkpoint and `.hydra/config.yaml` snapshot to `training.hf.repo_id` (or the `HF_REPO_ID` env var) at the end of training. On startup, `ensure_hf_credentials()` validates `HF_TOKEN` via `whoami`, prompts for any missing values, and offers to persist them to `.env` so subsequent runs are non-interactive. Copy `.env.example` to `.env` for fully unattended runs.
 
