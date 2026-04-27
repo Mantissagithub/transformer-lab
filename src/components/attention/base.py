@@ -1,9 +1,8 @@
 from typing import Optional
 
-import math
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class AttentionBase(nn.Module):
@@ -36,13 +35,21 @@ def scaled_dot_product(
     dropout: Optional[nn.Dropout],
     bias: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    d_k = q.shape[-1]
-    scores = (q @ k.transpose(-2, -1)) / math.sqrt(d_k)
-    if bias is not None:
-        scores = scores + bias
+    attn_mask: Optional[torch.Tensor] = None
     if mask is not None:
-        scores = scores.masked_fill(mask == 0, -1e9)
-    attn = scores.softmax(dim=-1)
-    if dropout is not None:
-        attn = dropout(attn)
-    return attn @ v
+        if mask.dtype == torch.bool or mask.is_floating_point():
+            attn_mask = mask
+        else:
+            attn_mask = mask != 0
+    if bias is not None:
+        if attn_mask is None:
+            attn_mask = bias
+        elif attn_mask.dtype == torch.bool:
+            additive = torch.zeros_like(bias)
+            additive.masked_fill_(~attn_mask, float("-inf"))
+            attn_mask = additive + bias
+        else:
+            attn_mask = attn_mask + bias
+
+    p = dropout.p if (isinstance(dropout, nn.Dropout) and dropout.training) else 0.0
+    return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=p)

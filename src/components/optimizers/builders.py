@@ -10,8 +10,14 @@ from .lion import Lion
 
 
 @OPTIMIZER.register("adamw")
-def build_adamw(model: nn.Module, lr: float = 1e-4, weight_decay: float = 0.01, **kwargs) -> List[Optimizer]:
-    return [torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)]
+def build_adamw(
+    model: nn.Module,
+    lr: float = 1e-4,
+    weight_decay: float = 0.01,
+    betas: tuple = (0.9, 0.999),
+    **kwargs,
+) -> List[Optimizer]:
+    return [torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, betas=tuple(betas))]
 
 
 @OPTIMIZER.register("lion")
