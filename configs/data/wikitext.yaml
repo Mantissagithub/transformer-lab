@@ -1,0 +1,14 @@
+name: wikitext
+hf_path: Salesforce/wikitext
+hf_config: wikitext-103-raw-v1
+train_split: train
+val_split: validation
+tokenizer_dir: tokenizers
+tokenizer_basename: wikitext_bpe
+vocab_size: 32000
+seq_len: 2048
+batch_size: 8
+val_batch_size: 1
+num_workers: 2
+tokenizer_train_samples: 200000
+val_samples: 256

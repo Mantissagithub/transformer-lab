@@ -28,7 +28,7 @@ configs/
   optimizer/                          # adamw, muon_adamw, lion, adafactor
   scheduler/                          # none, cosine_warmup, linear_warmup
   loss/                               # cross_entropy
-  data/                               # meetingbank, multi_news, fineweb_edu
+  data/                               # meetingbank, multi_news, fineweb_edu, fineweb_edu_100bt, c4, wikitext, wikipedia
   logging/                            # tensorboard, neptune, wandb
   experiment/                         # meeting_summarization_{residual,mhc,modern},
                                       # multinews_modern, pretrain_500m

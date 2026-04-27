@@ -72,6 +72,8 @@ class _PackedCausalLM(IterableDataset):
 
 @DATASET.register("fineweb_edu")
 @DATASET.register("c4")
+@DATASET.register("wikitext")
+@DATASET.register("wikipedia")
 def build_fineweb_edu(
     name: str = "fineweb_edu",
     hf_path: str = "HuggingFaceFW/fineweb-edu",
