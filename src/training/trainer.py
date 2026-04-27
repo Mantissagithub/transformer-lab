@@ -5,7 +5,6 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
-from rich.live import Live
 from tqdm import tqdm
 
 from src.model.builder import build_causal_lm, build_transformer
@@ -214,14 +213,15 @@ class Trainer:
                 num_epochs=num_epochs,
                 device=self.device,
             )
-            tui.event(f"start: {num_epochs} epochs × {steps_per_epoch} steps", "bold green3")
-            live_ctx = Live(tui.render(), console=tui.console, refresh_per_second=10, screen=False)
+            live_ctx = tui
         else:
             tui = None
             live_ctx = nullcontext()
 
         stop = False
-        with live_ctx as live:
+        with live_ctx:
+            if tui is not None:
+                tui.event(f"start: {num_epochs} epochs × {steps_per_epoch} steps")
             for epoch in range(self.start_epoch, num_epochs):
                 if stop:
                     break
@@ -278,7 +278,6 @@ class Trainer:
                                 loss=loss_val,
                                 lr=lr,
                             )
-                            live.update(tui.render())
                         elif hasattr(iterator, "set_postfix"):
                             iterator.set_postfix(loss=f"{loss_val:6.3f}")
 
@@ -298,12 +297,10 @@ class Trainer:
                         global_step=self.global_step,
                     )
                     if tui is not None:
-                        tui.event(f"epoch {epoch + 1} done · saved {last_ckpt.name}", "green3")
-                        live.update(tui.render())
+                        tui.event(f"epoch {epoch + 1} done · saved {last_ckpt.name}")
 
             if tui is not None:
-                tui.event("training complete", "bold green3")
-                live.update(tui.render())
+                tui.event("training complete")
 
         if self.dist_env.is_main:
             self.logger.close()
