@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
@@ -28,15 +28,21 @@ def ensure_hf_credentials(cfg: DictConfig) -> None:
         if Confirm.ask("Save HF_TOKEN to .env for next run?", default=True):
             _append_env(PROJECT_ROOT / ".env", "HF_TOKEN", token)
 
-    repo_id = hf_cfg.get("repo_id") or os.environ.get("HF_REPO_ID")
+    repo_id = hf_cfg.get("repo_id")
     if not repo_id:
-        console.print("[yellow]No repo_id in cfg.training.hf or HF_REPO_ID env.[/]")
-        repo_id = Prompt.ask("HF repo_id (e.g. username/multinews-modern)").strip()
-        if not repo_id:
-            raise RuntimeError("repo_id is required when training.hf.push=true")
-        os.environ["HF_REPO_ID"] = repo_id
-        if Confirm.ask("Save HF_REPO_ID to .env for next run?", default=True):
-            _append_env(PROJECT_ROOT / ".env", "HF_REPO_ID", repo_id)
+        username = os.environ.get("HF_USERNAME")
+        if not username:
+            console.print("[yellow]HF_USERNAME not found in env or .env.[/]")
+            username = Prompt.ask("Enter HF username").strip()
+            if not username:
+                raise RuntimeError("HF_USERNAME is required when training.hf.push=true")
+            os.environ["HF_USERNAME"] = username
+            if Confirm.ask("Save HF_USERNAME to .env for next run?", default=True):
+                _append_env(PROJECT_ROOT / ".env", "HF_USERNAME", username)
+        repo_id = f"{username}/{cfg.experiment_name}"
+        OmegaConf.set_struct(cfg, False)
+        cfg.training.hf.repo_id = repo_id
+        OmegaConf.set_struct(cfg, True)
 
     from huggingface_hub import HfApi
 

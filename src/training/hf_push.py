@@ -23,11 +23,10 @@ def push_checkpoint(
             "Copy .env.example to .env and fill in HF_TOKEN, "
             "or generate one at https://huggingface.co/settings/tokens"
         )
-    repo_id = repo_id or os.environ.get("HF_REPO_ID")
     if not repo_id:
         raise RuntimeError(
-            "HF push requested but no repo_id provided. Set training.hf.repo_id "
-            "in the config or HF_REPO_ID in .env"
+            "HF push requested but repo_id is empty. "
+            "ensure_hf_credentials() should have populated cfg.training.hf.repo_id."
         )
 
     create_repo(repo_id, token=token, exist_ok=True, private=private)

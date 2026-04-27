@@ -28,7 +28,7 @@ training:
   tui: true
   hf:
     push: false
-    repo_id: null            # falls back to HF_REPO_ID env var
+    repo_id: null            # auto-derived as {HF_USERNAME}/{experiment_name} if null
     private: false
     commit_message: null     # auto-generated from experiment_name if null
 
