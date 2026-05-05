@@ -1,0 +1,11 @@
+name: csa
+n_heads: 8
+n_I_h: 4
+m: 4
+k: 4
+n_win: 16
+g: 2
+c: 8
+c_I: 4
+d_c: 16
+d_g: 16
