@@ -9,3 +9,5 @@ c: 8
 c_I: 4
 d_c: 16
 d_g: 16
+rope_dim: 4
+max_seq_len: 64
