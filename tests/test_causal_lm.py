@@ -79,6 +79,63 @@ def test_kv_cache_parity():
     assert torch.allclose(cached_logits[:, -1, :], recomputed[:, -1, :], atol=1e-4)
 
 
+def _parity_check(cfg, prompt_len: int = 5, decode_steps: int = 3, atol: float = 1e-4) -> None:
+    """Prefill on a random prompt, decode one token at a time with the cache,
+    and at each step assert the cached last-token logits match a from-scratch
+    recompute over (prompt + tokens-so-far)."""
+    torch.manual_seed(0)
+    model = build_causal_lm(cfg).eval()
+    prompt = torch.randint(0, cfg.model.src_vocab_size, (1, prompt_len))
+
+    with torch.no_grad():
+        full = model(prompt)
+        prefill_logits, past = model(prompt, past_kvs=None, return_kvs=True)
+        assert torch.allclose(prefill_logits, full, atol=1e-5)
+        ids = prompt
+        for _ in range(decode_steps):
+            next_tok = full[:, -1, :].argmax(dim=-1, keepdim=True)
+            cached_logits, past = model(next_tok, past_kvs=past, return_kvs=True)
+            ids = torch.cat([ids, next_tok], dim=-1)
+            recomputed = model(ids)
+            assert torch.allclose(
+                cached_logits[:, -1, :], recomputed[:, -1, :], atol=atol
+            ), f"divergence at len={ids.shape[1]}, max diff {(cached_logits[:, -1, :] - recomputed[:, -1, :]).abs().max().item():.3e}"
+            full = recomputed
+
+
+def test_kv_cache_parity_sliding_gqa():
+    cfg = _small_cfg()
+    cfg.attention = OmegaConf.create({
+        "name": "sliding_gqa", "n_heads": 4, "n_kv_heads": 2,
+        "window_size": 4, "bias": False,
+    })
+    _parity_check(cfg)
+
+
+def test_kv_cache_parity_sliding_window():
+    # sliding_window isn't rope-aware; the rope positional in _small_cfg falls
+    # through to a no-op forward, so the test exercises the cache mechanism
+    # with position-blind embeddings (decode and recompute must still match).
+    cfg = _small_cfg()
+    cfg.attention = OmegaConf.create({
+        "name": "sliding_window", "n_heads": 4, "window_size": 4, "bias": True,
+    })
+    _parity_check(cfg)
+
+
+def test_kv_cache_parity_csa():
+    # csa carries its own internal rope tables; the model-level rope positional
+    # is a no-op forward on the embedding for non-rope-aware attention.
+    cfg = _small_cfg()
+    cfg.attention = OmegaConf.create({
+        "name": "csa",
+        "n_heads": 4, "n_I_h": 2, "m": 2, "k": 4, "n_win": 4, "g": 2,
+        "c": 8, "c_I": 4, "d_c": 16, "d_g": 8,
+        "rope_dim": 4, "max_seq_len": 32,
+    })
+    _parity_check(cfg)
+
+
 def test_generate_with_eos_and_no_temperature():
     cfg = _small_cfg()
     model = build_causal_lm(cfg).eval()

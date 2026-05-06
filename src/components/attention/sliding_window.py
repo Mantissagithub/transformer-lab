@@ -4,6 +4,7 @@ import torch.nn as nn
 from src.registry import ATTENTION
 
 from .base import AttentionBase, scaled_dot_product
+from .kv_cache import SlidingKVCache
 
 
 @ATTENTION.register("sliding_window")
@@ -23,6 +24,9 @@ class SlidingWindowAttention(AttentionBase):
         self.wv = nn.Linear(d_model, d_model, bias=bias)
         self.wo = nn.Linear(d_model, d_model, bias=bias)
 
+    def init_cache(self) -> SlidingKVCache:
+        return SlidingKVCache(self.window_size)
+
     def _split(self, x: torch.Tensor) -> torch.Tensor:
         b, s, _ = x.shape
         return x.view(b, s, self.n_heads, self.d_head).transpose(1, 2)
@@ -33,13 +37,38 @@ class SlidingWindowAttention(AttentionBase):
         return ((j - i).abs() <= self.window_size).int().unsqueeze(0).unsqueeze(0)
 
     def forward(self, q, k, v, mask=None, past_kv=None, return_kv=False):
-        if past_kv is not None or return_kv:
-            raise NotImplementedError("sliding_window does not support KV cache")
+        b, sq, _ = q.shape
         query = self._split(self.wq(q))
         key = self._split(self.wk(k))
         value = self._split(self.wv(v))
-        window = self._window_mask(query.shape[-2], key.shape[-2], query.device)
-        combined = window if mask is None else (mask & window)
-        out = scaled_dot_product(query, key, value, combined, self.dropout)
-        out = out.transpose(1, 2).contiguous().view(out.shape[0], -1, self.d_model)
-        return self.wo(out)
+
+        # attention K/V is the (cached + new) view, untrimmed. cache.update is
+        # called AFTER attention so its trim doesn't drop entries the current
+        # query still needs.
+        if past_kv is not None and past_kv.k is not None:
+            attn_key = torch.cat([past_kv.k, key], dim=-2)
+            attn_value = torch.cat([past_kv.v, value], dim=-2)
+        else:
+            attn_key, attn_value = key, value
+
+        # prefill or multi-token: explicit band-diagonal window mask. on a
+        # single-token decode against a non-empty cache, attn_key holds at most
+        # window+1 entries (window cached + the new one) which are all visible
+        # to the new query — no mask needed.
+        # note: a user-passed `mask` is dropped on the decode branch — fine for
+        # the only current caller (causal_lm), but a future padding-mask caller
+        # would need to revisit this.
+        if past_kv is None or sq > 1:
+            window = self._window_mask(sq, attn_key.shape[-2], q.device)
+            combined = window if mask is None else (mask & window)
+        else:
+            combined = None
+
+        out = scaled_dot_product(query, attn_key, attn_value, combined, self.dropout)
+        out = out.transpose(1, 2).contiguous().view(b, sq, self.d_model)
+        out = self.wo(out)
+        if past_kv is not None:
+            past_kv.update(key, value)
+        if return_kv:
+            return out, past_kv
+        return out

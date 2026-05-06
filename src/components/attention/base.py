@@ -10,8 +10,9 @@ class AttentionBase(nn.Module):
 
     With return_kv=False (the default and the only path used by the encoder-decoder
     trainer) the return is a tensor of shape (b, s, d). With return_kv=True (used by
-    CausalLM.generate) the return is (out, (k, v)) where k, v are the post-projection
-    head-split tensors that should be passed back as past_kv on the next step.
+    CausalLM.generate) past_kv is a KVCache instance; the module mutates it in place
+    and returns (out, past_kv). Subclasses override ``init_cache`` to return the
+    cache type they expect (KVCache / SlidingKVCache / CSACache).
     """
 
     def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0) -> None:
@@ -22,6 +23,10 @@ class AttentionBase(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
         self.dropout = nn.Dropout(dropout)
+
+    def init_cache(self):
+        from .kv_cache import KVCache
+        return KVCache()
 
     def forward(self, q, k, v, mask=None, past_kv=None, return_kv=False):  # pragma: no cover - interface
         raise NotImplementedError

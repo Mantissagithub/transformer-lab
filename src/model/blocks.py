@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from src.components.attention.base import AttentionBase
+from src.components.attention.kv_cache import KVCache
 from src.components.connections.base import Connection
 from src.components.feedforward.base import FeedForwardBase
 
@@ -60,8 +61,8 @@ class CausalBlock(nn.Module):
         self,
         x: torch.Tensor,
         mask: Optional[torch.Tensor],
-        past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]],
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        past_kv: Optional[KVCache],
+    ) -> Tuple[torch.Tensor, KVCache]:
         attn_conn = self.connections[0]
         if attn_conn.is_stateful:
             raise NotImplementedError(

@@ -41,6 +41,7 @@ not implemented (todo):
 
 import math
 import warnings
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -50,6 +51,7 @@ from torch import Tensor
 from src.registry import ATTENTION
 
 from .base import AttentionBase
+from .kv_cache import CSACache
 
 
 def compress_kv_entries(
@@ -89,6 +91,33 @@ def build_compressed_indexer_keys(
     m: int,
 ) -> Tensor:                # [n_blocks, c_I]
     return compress_kv_entries(hidden_states, **w, m=m)
+
+
+def compress_one_block(
+    this_m: Tensor,                # [b, m, d]   stream-a tokens (just-completed block)
+    prev_m: Optional[Tensor],      # [b, m, d]   stream-b tokens (previous block) or None
+    W_aKV: Tensor, W_bKV: Tensor,  # [d, c]
+    W_aZ:  Tensor, W_bZ:  Tensor,  # [d, c]
+    B_a:   Tensor, B_b:   Tensor,  # [m, c]
+) -> Tensor:                       # [b, c]
+    """compress a single block incrementally. equivalent to taking the i-th
+    row of compress_kv_entries when prev_m is the (i-1)-th block's stream-a
+    input. for block 0, pass prev_m=None — b-stream logits get padded -inf
+    so the softmax weight on the b-side rows is exactly zero, matching the
+    block-0 behaviour of compress_kv_entries.
+    """
+    C_a = this_m @ W_aKV
+    Z_a = this_m @ W_aZ
+    if prev_m is None:
+        C_b = torch.zeros_like(C_a)
+        Z_b = torch.full_like(Z_a, float("-inf"))
+    else:
+        C_b = prev_m @ W_bKV
+        Z_b = prev_m @ W_bZ
+    logits = torch.cat([Z_a + B_a, Z_b + B_b], dim=-2)   # [b, 2m, c]
+    weights = torch.softmax(logits, dim=-2)
+    values = torch.cat([C_a, C_b], dim=-2)
+    return (weights * values).sum(dim=-2)                # [b, c]
 
 
 def build_query_latent(h_t: Tensor, W_DQ: Tensor) -> Tensor:
@@ -382,6 +411,9 @@ class CompressedSparseAttention(AttentionBase):
         for p in (self.B_a, self.B_b, self.B_aI, self.B_bI, self.z_sink):
             nn.init.zeros_(p)
 
+    def init_cache(self) -> CSACache:
+        return CSACache(self.m, self.n_win)
+
     def _weights(self) -> dict:
         return {
             "compress": dict(
@@ -419,17 +451,27 @@ class CompressedSparseAttention(AttentionBase):
         output is re-rotated at position -t to make the result
         translation-invariant for the layer above (relative-position trick).
         """
-        if past_kv is not None or return_kv:
-            raise NotImplementedError("csa does not support KV cache")
         if k is not q or v is not q:
             warnings.warn(
                 "csa ignores k/v; treating q as the hidden state stream",
                 stacklevel=2,
             )
 
+        # decode: single-token incremental step against an existing cache.
+        if past_kv is not None and past_kv.total_seen > 0 and q.shape[1] == 1:
+            out = self._decode_step(q, past_kv)
+            return (out, past_kv) if return_kv else out
+
+        # prefill: vectorised forward, then optionally populate the cache.
         b, _, _ = q.shape
         outs = [self._forward_seq(q[bi]) for bi in range(b)]
-        return self.dropout(torch.stack(outs, dim=0))
+        out = self.dropout(torch.stack(outs, dim=0))
+        if return_kv:
+            if past_kv is None:
+                past_kv = self.init_cache()
+            self._populate_cache_from_prefill(q, past_kv)
+            return out, past_kv
+        return out
 
     def _forward_seq(self, H: Tensor) -> Tensor:
         """vectorized per-t compute for one sequence. [s, d] -> [s, d]."""
@@ -528,6 +570,143 @@ class CompressedSparseAttention(AttentionBase):
         flat  = heads.reshape(s, g, hpg * c)                           # [s, g, hpg*c]
         inter = torch.einsum("sgi,gid->sgd", flat, self.W_group)       # [s, g, d_g]
         return inter.reshape(s, g * self.d_g) @ self.W_final           # [s, d]
+
+    def _populate_cache_from_prefill(self, H: Tensor, cache: CSACache) -> None:
+        """build the decode-side state from the just-processed prefill batch.
+        H is [b, s, d]; cache fields land with leading b dim."""
+        b, s, _ = H.shape
+        m, n_win = self.m, self.n_win
+        n_blocks = s // m
+
+        if n_blocks > 0:
+            full = H[:, : n_blocks * m, :]   # [b, n_blocks*m, d]
+            C_list = [
+                compress_kv_entries(
+                    full[bi], self.W_aKV, self.W_bKV, self.W_aZ, self.W_bZ,
+                    self.B_a, self.B_b, m,
+                )
+                for bi in range(b)
+            ]
+            K_list = [
+                compress_kv_entries(
+                    full[bi], self.W_aIK, self.W_bIK, self.W_aIZ, self.W_bIZ,
+                    self.B_aI, self.B_bI, m,
+                )
+                for bi in range(b)
+            ]
+            cache.C_comp = torch.stack(C_list, dim=0)             # [b, n_blocks, c]
+            cache.K_IComp = torch.stack(K_list, dim=0)            # [b, n_blocks, c_I]
+            cache.prev_block = H[:, (n_blocks - 1) * m : n_blocks * m, :].clone()
+        else:
+            cache.C_comp = H.new_zeros(b, 0, self.c)
+            cache.K_IComp = H.new_zeros(b, 0, self.c_I)
+            cache.prev_block = None
+
+        cache.raw_tail = H[:, n_blocks * m :, :].clone()           # [b, s%m, d]
+        cache.swa = (H @ self.W_KV_swa)[:, -n_win:, :].clone()     # [b, <=n_win, c]
+        cache.total_seen = s
+
+    def _decode_step(self, q: Tensor, cache: CSACache) -> Tensor:
+        """incremental decode for a single new token. q is [b, 1, d]; returns
+        [b, 1, d]. mutates `cache` in place."""
+        b, _, d = q.shape
+        m, n_win, n_h, n_I_h = self.m, self.n_win, self.n_heads, self.n_I_h
+        c, c_I, g = self.c, self.c_I, self.g
+        rope_dim, main_dim = self.rope_dim, self.c - self.rope_dim
+        h_new = q[:, 0, :]                                          # [b, d]
+
+        # 1) extend raw_tail; if it now equals m tokens, compress one block.
+        new_tok = h_new[:, None, :]                                 # [b, 1, d]
+        if cache.raw_tail is None or cache.raw_tail.shape[1] == 0:
+            cache.raw_tail = new_tok
+        else:
+            cache.raw_tail = torch.cat([cache.raw_tail, new_tok], dim=1)
+
+        if cache.raw_tail.shape[1] == m:
+            new_C = compress_one_block(
+                cache.raw_tail, cache.prev_block,
+                self.W_aKV, self.W_bKV, self.W_aZ, self.W_bZ,
+                self.B_a, self.B_b,
+            )                                                        # [b, c]
+            new_K = compress_one_block(
+                cache.raw_tail, cache.prev_block,
+                self.W_aIK, self.W_bIK, self.W_aIZ, self.W_bIZ,
+                self.B_aI, self.B_bI,
+            )                                                        # [b, c_I]
+            cache.C_comp = torch.cat([cache.C_comp, new_C[:, None, :]], dim=1)
+            cache.K_IComp = torch.cat([cache.K_IComp, new_K[:, None, :]], dim=1)
+            cache.prev_block = cache.raw_tail.clone()
+            cache.raw_tail = h_new.new_zeros(b, 0, d)
+
+        # 2) extend swa with the just-arrived token's projection, trim to n_win.
+        swa_new = new_tok @ self.W_KV_swa                            # [b, 1, c]
+        cache.swa = torch.cat([cache.swa, swa_new], dim=1)[:, -n_win:, :]
+
+        # 3) absolute position of the new query token, then bump.
+        t_abs = cache.total_seen
+        cache.total_seen += 1
+
+        # 4) per-batch decode (mirrors _forward_seq's per-bi loop). cheap because
+        #    everything is a single-token op; vectorising over bi is a future task.
+        outs = []
+        for bi in range(b):
+            c_Q_t = h_new[bi] @ self.W_DQ                            # [d_c]
+            main_q_bi = (c_Q_t @ self.W_UQ).view(n_h, c)             # [n_h, c]
+            indexer_q_bi = (c_Q_t @ self.W_IUQ).view(n_I_h, c_I)     # [n_I_h, c_I]
+
+            scores = lightning_indexer(
+                h_new[bi], indexer_q_bi, cache.K_IComp[bi], self.W_w
+            )                                                        # [n_blocks]
+
+            n_blocks = cache.K_IComp.shape[1]
+            n_valid = min(t_abs // m, n_blocks)
+            if n_valid > 0:
+                k_actual = min(self.k, n_valid)
+                bs_idx = torch.arange(n_blocks, device=h_new.device)
+                masked = scores.masked_fill(bs_idx >= n_valid, float("-inf"))
+                sel_idx = masked.topk(k_actual).indices              # [k_actual]
+                sel_kv_bi = cache.C_comp[bi][sel_idx]                # [k_actual, c]
+            else:
+                sel_idx = h_new.new_zeros(0, dtype=torch.long)
+                sel_kv_bi = h_new.new_zeros(0, c)
+
+            swa_kv_bi = cache.swa[bi]                                # [<=n_win, c]
+            kv = torch.cat([sel_kv_bi, swa_kv_bi], dim=0)            # [k+swa_len, c]
+
+            main_q_bi = self.q_norm(main_q_bi)
+            kv = self.kv_norm(kv)
+
+            if rope_dim > 0:
+                q_main, q_rope = main_q_bi[..., :main_dim], main_q_bi[..., main_dim:]
+                q_rope = apply_rope(q_rope, t_abs, self.rope_cos, self.rope_sin)
+                main_q_bi = torch.cat([q_main, q_rope], dim=-1)
+
+                kv_main, kv_rope = kv[..., :main_dim], kv[..., main_dim:]
+                swa_len = swa_kv_bi.shape[0]
+                swa_pos = torch.arange(
+                    t_abs - swa_len + 1, t_abs + 1, device=h_new.device
+                )
+                kv_pos = (
+                    torch.cat([sel_idx, swa_pos], dim=0)
+                    if sel_idx.numel() > 0
+                    else swa_pos
+                )
+                kv_rope = apply_rope(kv_rope, kv_pos, self.rope_cos, self.rope_sin)
+                kv = torch.cat([kv_main, kv_rope], dim=-1)
+
+            heads = shared_kv_mqa(main_q_bi, kv, self.z_sink)        # [n_h, c]
+
+            if rope_dim > 0:
+                o_main, o_rope = heads[..., :main_dim], heads[..., main_dim:]
+                o_rope = apply_rope(o_rope, -t_abs, self.rope_cos, self.rope_sin)
+                heads = torch.cat([o_main, o_rope], dim=-1)
+
+            out_bi = grouped_output_projection(
+                heads, self.W_group, self.W_final, g
+            )                                                         # [d]
+            outs.append(out_bi)
+
+        return self.dropout(torch.stack(outs, dim=0)[:, None, :])     # [b, 1, d]
 
     def _forward_seq_serial(self, H: Tensor) -> Tensor:
         """per-t reference implementation, kept to verify the vectorized path."""

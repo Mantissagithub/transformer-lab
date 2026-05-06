@@ -34,15 +34,12 @@ class GroupedQueryAttention(AttentionBase):
         key = self.wk(k).view(b, sk, self.n_kv_heads, self.d_head).transpose(1, 2)
         value = self.wv(v).view(b, sk, self.n_kv_heads, self.d_head).transpose(1, 2)
         if past_kv is not None:
-            past_k, past_v = past_kv
-            key = torch.cat([past_k, key], dim=-2)
-            value = torch.cat([past_v, value], dim=-2)
-        new_kv = (key, value) if return_kv else None
+            key, value = past_kv.update(key, value)
         key_x = key.repeat_interleave(self.group, dim=1)
         value_x = value.repeat_interleave(self.group, dim=1)
         out = scaled_dot_product(query, key_x, value_x, mask, self.dropout)
         out = out.transpose(1, 2).contiguous().view(b, sq, self.d_model)
         out = self.wo(out)
         if return_kv:
-            return out, new_kv
+            return out, past_kv
         return out

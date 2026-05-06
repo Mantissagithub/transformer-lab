@@ -1,18 +1,15 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.components.attention.kv_cache import KVCache
 from src.utils.masks import causal_mask
 
 from .blocks import CausalBlock
 
-# The KVCache LRU class in src/components/attention/kv_cache.py is a memoization
-# helper, not the right primitive for per-layer past_kv during generation. We use
-# plain (k, v) tuples instead, one per layer.
-
-PastKVs = List[Tuple[torch.Tensor, torch.Tensor]]
+PastKVs = List[KVCache]
 
 
 class CausalLM(nn.Module):
@@ -38,7 +35,7 @@ class CausalLM(nn.Module):
         return_kvs: bool = False,
     ) -> torch.Tensor:
         b, sq = input_ids.shape
-        past_len = 0 if past_kvs is None else past_kvs[0][0].shape[-2]
+        past_len = 0 if past_kvs is None else past_kvs[0].position()
         x = self.pos(self.embed(input_ids))
 
         if past_kvs is None:
@@ -54,10 +51,12 @@ class CausalLM(nn.Module):
             x = self.norm(x)
             return self.projection(x)
 
+        if past_kvs is None:
+            past_kvs = [layer.attn.init_cache() for layer in self.layers]
+
         new_kvs: PastKVs = []
         for i, layer in enumerate(self.layers):
-            past_kv = past_kvs[i] if past_kvs is not None else None
-            x, new_kv = layer.forward_with_cache(x, mask, past_kv)
+            x, new_kv = layer.forward_with_cache(x, mask, past_kvs[i])
             new_kvs.append(new_kv)
         x = self.norm(x)
         logits = self.projection(x)

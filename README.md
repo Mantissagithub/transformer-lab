@@ -173,7 +173,7 @@ out = model.generate(
 )
 ```
 
-Runs prefill once, then steps token-by-token using per-layer `(k, v)` tuples. (The `KVCache` LRU helper in `src/components/attention/kv_cache.py` is a memoization helper, not the generation primitive — it is intentionally not used here.)
+Runs prefill once, then steps token-by-token using per-layer cache objects. The cache primitives live in `src/components/attention/kv_cache.py`: `KVCache` for full attention (`mha`, `gqa`, `mqa`, `gqa_rope`), `SlidingKVCache` for the trailing-window variants (`sliding_window`, `sliding_gqa`), and `CSACache` for the per-block compressed state used by `csa`. Each attention class declares its cache type via `init_cache()`; `CausalLM` builds one cache per layer on the first decode call and re-passes the same instances every step.
 
 ## Tests
 

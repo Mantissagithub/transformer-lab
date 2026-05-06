@@ -24,12 +24,10 @@ class MultiHeadAttention(AttentionBase):
         key = self._split(self.wk(k))
         value = self._split(self.wv(v))
         if past_kv is not None:
-            past_k, past_v = past_kv
-            key = torch.cat([past_k, key], dim=-2)
-            value = torch.cat([past_v, value], dim=-2)
+            key, value = past_kv.update(key, value)
         out = scaled_dot_product(query, key, value, mask, self.dropout)
         out = out.transpose(1, 2).contiguous().view(out.shape[0], -1, self.d_model)
         out = self.wo(out)
         if return_kv:
-            return out, (key, value)
+            return out, past_kv
         return out
