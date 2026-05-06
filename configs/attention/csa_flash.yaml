@@ -1,0 +1,13 @@
+name: csa
+n_heads: 64
+n_I_h: 64
+m: 4
+k: 512
+n_win: 128
+g: 8
+c: 512
+c_I: 128
+d_c: 1024
+d_g: 1024
+rope_dim: 64
+max_seq_len: 32768

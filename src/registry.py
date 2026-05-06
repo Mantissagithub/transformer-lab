@@ -8,6 +8,9 @@ class Registry:
 
     def register(self, name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(obj: Callable[..., Any]) -> Callable[..., Any]:
+            # TODO: registry idempotency — silent no-op when the same (name, obj)
+            # pair re-registers. bites `python -m module` when the package
+            # __init__ already imported the module via `from . import x`.
             if name in self._items:
                 raise ValueError(f"{self._kind} '{name}' already registered")
             self._items[name] = obj

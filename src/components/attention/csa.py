@@ -30,11 +30,13 @@ shapes follow the paper:
 implemented:
   compression (eq 9), lightning indexer, top-k selection, sliding window,
   shared-kv mqa with learnable per-head sink (eq 27), rmsnorm + partial rope
-  with relative-position trick on q and kv (§2.3.3), grouped output projection.
+  with relative-position trick on q and kv (§2.3.3), grouped output projection,
+  vectorized per-t compute (forward runs one matmul per stage over the full
+  sequence at once instead of looping t).
 
 not implemented (todo):
-  batched-vectorized per-t compute, kv-cache for incremental decoding,
-  fp4 indexer precision.
+  batched-over-bi vectorization (forward still loops batch elements),
+  kv-cache for incremental decoding, fp4 indexer precision.
 """
 
 import math
@@ -189,13 +191,22 @@ def _build_rope_tables(rope_dim: int, max_seq_len: int, base: float = 10000.0):
 
 def apply_rope(
     x: Tensor,              # [..., rope_dim]   rope_dim must be even
-    positions,              # int (broadcast) or 1d long tensor over the last-1 dim
+    positions,              # int, or long tensor of any shape that prefixes x's leading dims
     cos_table: Tensor,      # [max_seq_len, rope_dim/2]
     sin_table: Tensor,      # [max_seq_len, rope_dim/2]
 ) -> Tensor:
     """
-    half-split rope rotation. supports negative scalar positions for the
+    half-split rope rotation. supports negative positions for the
     post-attention de-rotate trick: cos(-θ) = cos(θ), sin(-θ) = -sin(θ).
+
+    half-split convention; do not mix with interleaved rope (e.g. hf
+    `apply_rotary_pos_emb`) — both rotate the same pairs but in different
+    memory layouts, so swapping in an interleaved variant silently produces
+    wrong attention scores.
+
+    if positions is a tensor with fewer leading dims than x, the missing dims
+    are inserted at -2 to broadcast over them. e.g. x=[s, n_h, rope_dim] with
+    positions=[s] turns cos into [s, 1, half] for broadcast over n_h.
     """
     half = x.shape[-1] // 2
     x1, x2 = x[..., :half], x[..., half:]
@@ -205,8 +216,15 @@ def apply_rope(
         cos = cos_table[idx]
         sin = sign * sin_table[idx]
     else:
-        cos = cos_table[positions]
-        sin = sin_table[positions]
+        # sign-based negative handling avoids a .any() cpu sync
+        abs_pos = positions.abs()
+        cos = cos_table[abs_pos]
+        sin = sin_table[abs_pos]
+        sign = torch.where(positions >= 0, 1.0, -1.0).to(sin.dtype)
+        sin = sign[..., None] * sin
+        while cos.dim() < x.dim():
+            cos = cos.unsqueeze(-2)
+            sin = sin.unsqueeze(-2)
     return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
 
 
@@ -409,80 +427,169 @@ class CompressedSparseAttention(AttentionBase):
                 stacklevel=2,
             )
 
-        b, s, _ = q.shape
-        rope_dim = self.rope_dim
-        main_dim = self.c - rope_dim
-        out = q.new_zeros(b, s, self.d_model)
+        b, _, _ = q.shape
+        outs = [self._forward_seq(q[bi]) for bi in range(b)]
+        return self.dropout(torch.stack(outs, dim=0))
 
-        # todo: vectorize the per-batch and per-t loops for training throughput
-        for bi in range(b):
-            H = q[bi]   # [s, d]
+    def _forward_seq(self, H: Tensor) -> Tensor:
+        """vectorized per-t compute for one sequence. [s, d] -> [s, d]."""
+        s, _ = H.shape
+        c, c_I, n_h, n_I_h = self.c, self.c_I, self.n_heads, self.n_I_h
+        m, k_top, n_win, g = self.m, self.k, self.n_win, self.g
+        rope_dim, main_dim = self.rope_dim, self.c - self.rope_dim
 
-            # compression depends only on the full sequence — hoist out of t-loop
-            C_comp = compress_kv_entries(
-                H, self.W_aKV, self.W_bKV, self.W_aZ, self.W_bZ,
-                self.B_a, self.B_b, self.m,
-            )                                               # [n_blocks, c]
-            K_IComp = compress_kv_entries(
-                H, self.W_aIK, self.W_bIK, self.W_aIZ, self.W_bIZ,
-                self.B_aI, self.B_bI, self.m,
-            )                                               # [n_blocks, c_I]
+        # compression depends only on the full sequence
+        C_comp = compress_kv_entries(
+            H, self.W_aKV, self.W_bKV, self.W_aZ, self.W_bZ,
+            self.B_a, self.B_b, m,
+        )                                                              # [n_blocks, c]
+        K_IComp = compress_kv_entries(
+            H, self.W_aIK, self.W_bIK, self.W_aIZ, self.W_bIZ,
+            self.B_aI, self.B_bI, m,
+        )                                                              # [n_blocks, c_I]
+        n_blocks = C_comp.shape[0]
 
-            for t in range(s):
-                c_Q_t     = build_query_latent(H[t], self.W_DQ)
-                indexer_q = build_indexer_queries(c_Q_t, self.W_IUQ, self.n_I_h, self.c_I)
-                scores    = lightning_indexer(H[t], indexer_q, K_IComp, self.W_w)
+        # query latent + main/indexer queries (one matmul per stage)
+        c_Q       = H @ self.W_DQ                                      # [s, d_c]
+        main_q    = (c_Q @ self.W_UQ ).view(s, n_h,   c)               # [s, n_h, c]
+        indexer_q = (c_Q @ self.W_IUQ).view(s, n_I_h, c_I)             # [s, n_I_h, c_I]
 
-                # inline top-k so we keep block indices for rope positions
-                n_valid = min(t // self.m, scores.shape[0])
-                if n_valid > 0:
-                    k_actual = min(self.k, n_valid)
-                    sel_idx  = scores[:n_valid].topk(k_actual).indices
-                    selected = C_comp[sel_idx]
-                else:
-                    sel_idx  = scores.new_zeros(0, dtype=torch.long)
-                    selected = C_comp.new_zeros(0, self.c)
+        ts = torch.arange(s, device=H.device)
 
-                start  = max(0, t - self.n_win + 1)
-                swa_kv = H[start : t + 1] @ self.W_KV_swa   # [<=n_win, c]
+        # lightning indexer scores (eq for I[t, b]) — vectorized over t
+        if n_blocks > 0:
+            w_idx  = H @ self.W_w                                              # [s, n_I_h]
+            inner  = F.relu(torch.einsum("thi,bi->thb", indexer_q, K_IComp))   # [s, n_I_h, n_blocks]
+            scores = (w_idx[..., None] * inner).sum(dim=1)                     # [s, n_blocks]
 
-                kv     = torch.cat([selected, swa_kv], dim=0)
-                main_q = build_main_queries(c_Q_t, self.W_UQ, self.n_heads, self.c)
+            # causal mask: block b is visible to query t iff b < floor(t/m)
+            bs          = torch.arange(n_blocks, device=H.device)
+            valid_block = bs[None, :] < (ts[:, None] // m)                     # [s, n_blocks]
+            masked      = scores.masked_fill(~valid_block, float("-inf"))
 
-                # rmsnorm on q and kv before rope (§2.3.3)
-                main_q = self.q_norm(main_q)
-                kv     = self.kv_norm(kv)
+            k_eff = min(k_top, n_blocks)
+            top_v, top_idx = masked.topk(k_eff, dim=-1)                        # [s, k_eff]
+            sel_valid = top_v > float("-inf")                                  # [s, k_eff]
+            sel_kv    = C_comp[top_idx]                                        # [s, k_eff, c]
+        else:
+            k_eff     = 0
+            top_idx   = main_q.new_zeros(s, 0, dtype=torch.long)
+            sel_valid = main_q.new_zeros(s, 0, dtype=torch.bool)
+            sel_kv    = main_q.new_zeros(s, 0, c)
 
-                # partial rope on the last rope_dim of q and kv
-                if rope_dim > 0:
-                    q_main, q_rope   = main_q[..., :main_dim], main_q[..., main_dim:]
-                    kv_main, kv_rope = kv[..., :main_dim],     kv[..., main_dim:]
+        # sliding window kv — right-aligned window of length n_win per t
+        swa_full    = H @ self.W_KV_swa                                # [s, c]
+        offset      = torch.arange(n_win, device=H.device) - (n_win - 1)
+        abs_pos_swa = ts[:, None] + offset[None, :]                    # [s, n_win], may go negative
+        swa_valid   = abs_pos_swa >= 0                                 # [s, n_win]
+        swa_clamped = abs_pos_swa.clamp(min=0)
+        swa_kv      = swa_full[swa_clamped]                            # [s, n_win, c]
 
-                    q_rope = apply_rope(q_rope, t, self.rope_cos, self.rope_sin)
+        # rmsnorm on q and kv before rope (§2.3.3)
+        main_q = self.q_norm(main_q)
+        sel_kv = self.kv_norm(sel_kv) if k_eff > 0 else sel_kv
+        swa_kv = self.kv_norm(swa_kv)
 
-                    swa_pos = torch.arange(start, t + 1, device=H.device)
-                    if sel_idx.numel() > 0:
-                        kv_pos = torch.cat([sel_idx, swa_pos], dim=0)
-                    else:
-                        kv_pos = swa_pos
-                    kv_rope = apply_rope(kv_rope, kv_pos, self.rope_cos, self.rope_sin)
+        # partial rope on last rope_dim of q and kv
+        if rope_dim > 0:
+            q_main,  q_rope  = main_q[..., :main_dim], main_q[..., main_dim:]
+            q_rope = apply_rope(q_rope, ts, self.rope_cos, self.rope_sin)
+            main_q = torch.cat([q_main, q_rope], dim=-1)
 
-                    main_q = torch.cat([q_main, q_rope], dim=-1)
-                    kv     = torch.cat([kv_main, kv_rope], dim=-1)
+            if k_eff > 0:
+                sel_main, sel_rope = sel_kv[..., :main_dim], sel_kv[..., main_dim:]
+                sel_rope = apply_rope(sel_rope, top_idx, self.rope_cos, self.rope_sin)
+                sel_kv = torch.cat([sel_main, sel_rope], dim=-1)
 
-                heads = shared_kv_mqa(main_q, kv, self.z_sink)
+            swa_main, swa_rope = swa_kv[..., :main_dim], swa_kv[..., main_dim:]
+            swa_rope = apply_rope(swa_rope, swa_clamped, self.rope_cos, self.rope_sin)
+            swa_kv = torch.cat([swa_main, swa_rope], dim=-1)
 
-                # de-rotate the rope half at -t (relative-position trick)
-                if rope_dim > 0:
-                    o_main, o_rope = heads[..., :main_dim], heads[..., main_dim:]
-                    o_rope = apply_rope(o_rope, -t, self.rope_cos, self.rope_sin)
-                    heads  = torch.cat([o_main, o_rope], dim=-1)
+        # combine kv branches and validity mask for one shared-kv mqa pass
+        kv_all    = torch.cat([sel_kv, swa_kv], dim=1)                 # [s, k_eff+n_win, c]
+        valid_all = torch.cat([sel_valid, swa_valid], dim=1)           # [s, k_eff+n_win]
 
-                out[bi, t] = grouped_output_projection(
-                    heads, self.W_group, self.W_final, self.g,
-                )
+        # shared-kv mqa with learnable sink (eq 27), vectorized over t
+        logits = torch.einsum("shc,smc->shm", main_q, kv_all) / math.sqrt(c)   # [s, n_h, n_kv]
+        logits = logits.masked_fill(~valid_all[:, None, :], float("-inf"))
+        sink   = self.z_sink[None, :, None].expand(s, n_h, 1)
+        ext    = torch.cat([logits, sink], dim=-1)
+        weights = torch.softmax(ext, dim=-1)[..., :-1]                 # drop sink col
+        heads  = torch.einsum("shm,smc->shc", weights, kv_all)         # [s, n_h, c]
 
-        return self.dropout(out)
+        # de-rotate output rope half at -t (relative-position trick)
+        if rope_dim > 0:
+            o_main, o_rope = heads[..., :main_dim], heads[..., main_dim:]
+            o_rope = apply_rope(o_rope, -ts, self.rope_cos, self.rope_sin)
+            heads  = torch.cat([o_main, o_rope], dim=-1)
+
+        # grouped output projection — vectorized over s
+        hpg   = n_h // g
+        flat  = heads.reshape(s, g, hpg * c)                           # [s, g, hpg*c]
+        inter = torch.einsum("sgi,gid->sgd", flat, self.W_group)       # [s, g, d_g]
+        return inter.reshape(s, g * self.d_g) @ self.W_final           # [s, d]
+
+    def _forward_seq_serial(self, H: Tensor) -> Tensor:
+        """per-t reference implementation, kept to verify the vectorized path."""
+        s, _ = H.shape
+        rope_dim, main_dim = self.rope_dim, self.c - self.rope_dim
+        out = H.new_zeros(s, self.d_model)
+
+        C_comp = compress_kv_entries(
+            H, self.W_aKV, self.W_bKV, self.W_aZ, self.W_bZ,
+            self.B_a, self.B_b, self.m,
+        )
+        K_IComp = compress_kv_entries(
+            H, self.W_aIK, self.W_bIK, self.W_aIZ, self.W_bIZ,
+            self.B_aI, self.B_bI, self.m,
+        )
+
+        for t in range(s):
+            c_Q_t     = build_query_latent(H[t], self.W_DQ)
+            indexer_q = build_indexer_queries(c_Q_t, self.W_IUQ, self.n_I_h, self.c_I)
+            scores    = lightning_indexer(H[t], indexer_q, K_IComp, self.W_w)
+
+            # mask invalid blocks then topk — same strategy as the vectorized path,
+            # so topk tie-break order matches when scores are equal (e.g. relu dead-zones).
+            n_blocks = scores.shape[0]
+            n_valid = min(t // self.m, n_blocks)
+            if n_valid > 0:
+                k_actual = min(self.k, n_valid)
+                bs = torch.arange(n_blocks, device=scores.device)
+                masked = scores.masked_fill(bs >= n_valid, float("-inf"))
+                sel_idx = masked.topk(k_actual).indices
+                selected = C_comp[sel_idx]
+            else:
+                sel_idx  = scores.new_zeros(0, dtype=torch.long)
+                selected = C_comp.new_zeros(0, self.c)
+
+            start  = max(0, t - self.n_win + 1)
+            swa_kv = H[start : t + 1] @ self.W_KV_swa
+            kv     = torch.cat([selected, swa_kv], dim=0)
+            main_q = build_main_queries(c_Q_t, self.W_UQ, self.n_heads, self.c)
+
+            main_q = self.q_norm(main_q)
+            kv     = self.kv_norm(kv)
+
+            if rope_dim > 0:
+                q_main,  q_rope  = main_q[..., :main_dim], main_q[..., main_dim:]
+                kv_main, kv_rope = kv[..., :main_dim],     kv[..., main_dim:]
+                q_rope = apply_rope(q_rope, t, self.rope_cos, self.rope_sin)
+                swa_pos = torch.arange(start, t + 1, device=H.device)
+                kv_pos = torch.cat([sel_idx, swa_pos], dim=0) if sel_idx.numel() > 0 else swa_pos
+                kv_rope = apply_rope(kv_rope, kv_pos, self.rope_cos, self.rope_sin)
+                main_q = torch.cat([q_main, q_rope], dim=-1)
+                kv     = torch.cat([kv_main, kv_rope], dim=-1)
+
+            heads = shared_kv_mqa(main_q, kv, self.z_sink)
+
+            if rope_dim > 0:
+                o_main, o_rope = heads[..., :main_dim], heads[..., main_dim:]
+                o_rope = apply_rope(o_rope, -t, self.rope_cos, self.rope_sin)
+                heads  = torch.cat([o_main, o_rope], dim=-1)
+
+            out[t] = grouped_output_projection(heads, self.W_group, self.W_final, self.g)
+        return out
 
 
 if __name__ == "__main__":
@@ -495,10 +602,18 @@ if __name__ == "__main__":
         rope_dim=16, max_seq_len=128,
     )
     q = torch.randn(2, 64, 128)
+
     out = m(q, q, q)
     assert out.shape == (2, 64, 128), out.shape
     assert not torch.isnan(out).any(), "csa produced nans"
+
+    # equivalence check: vectorized path vs per-t serial reference.
+    with torch.no_grad():
+        ref = torch.stack([m._forward_seq_serial(q[bi]) for bi in range(q.shape[0])], dim=0)
+    diff = (out - ref).abs().max().item()
+    assert diff < 1e-4, f"vectorized != serial, max abs diff {diff}"
+
     loss = out.sum()
     loss.backward()
     assert m.z_sink.grad is not None, "z_sink did not receive a gradient"
-    print("csa smoke test ok")
+    print(f"csa smoke test ok (vec vs serial max diff: {diff:.2e})")
