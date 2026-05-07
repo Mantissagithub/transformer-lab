@@ -136,6 +136,19 @@ def test_kv_cache_parity_csa():
     _parity_check(cfg)
 
 
+def test_kv_cache_parity_hca():
+    # hca has no rope/sink/rmsnorm — strict §2.3.2. m=2 so a 5-token prompt
+    # produces 2 compressed blocks, exercising both the empty-kv early-token
+    # path and the post-block-completion path during decode.
+    cfg = _small_cfg()
+    cfg.attention = OmegaConf.create({
+        "name": "hca",
+        "n_heads": 4, "m": 2, "g": 2,
+        "c": 8, "d_c": 16, "d_g": 8,
+    })
+    _parity_check(cfg)
+
+
 def test_generate_with_eos_and_no_temperature():
     cfg = _small_cfg()
     model = build_causal_lm(cfg).eval()

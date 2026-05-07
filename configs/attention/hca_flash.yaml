@@ -1,0 +1,7 @@
+name: hca
+n_heads: 64
+m: 64
+g: 8
+c: 512
+d_c: 1024
+d_g: 1024

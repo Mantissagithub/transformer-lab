@@ -10,6 +10,9 @@ Three cache shapes, one per attention family:
 - ``CSACache``        -- per-block compressed cache for CSA, with the
                          scratch state needed to incrementally compress
                          each new completed block during decode.
+- ``HCACache``        -- per-block compressed cache for HCA. No prev_block,
+                         no SWA, no indexer keys -- HCA blocks are
+                         self-contained (single-stream, no overlap).
 
 ``CausalLM`` builds one cache per layer via ``layer.attn.init_cache()`` on
 the first decode call and threads the same instances through every step.
@@ -93,6 +96,26 @@ class CSACache:
         self.prev_block: Optional[torch.Tensor] = None
         self.raw_tail: Optional[torch.Tensor] = None
         self.swa: Optional[torch.Tensor] = None
+        self.total_seen = 0
+
+    def position(self) -> int:
+        return self.total_seen
+
+
+class HCACache:
+    """Incremental decode state for heavily compressed attention.
+
+    Fields::
+
+        C_comp:     [b, n_blocks, c]   compressed kv blocks (eq 23)
+        raw_tail:   [b, t, d]          partial next block (t < m)
+        total_seen: int                absolute token count
+    """
+
+    def __init__(self, m: int) -> None:
+        self.m = m
+        self.C_comp: Optional[torch.Tensor] = None
+        self.raw_tail: Optional[torch.Tensor] = None
         self.total_seen = 0
 
     def position(self) -> int:

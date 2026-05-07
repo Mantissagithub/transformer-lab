@@ -1,0 +1,7 @@
+name: hca
+n_heads: 8
+m: 8
+g: 2
+c: 8
+d_c: 16
+d_g: 16
