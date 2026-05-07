@@ -13,6 +13,10 @@ Three cache shapes, one per attention family:
 - ``HCACache``        -- per-block compressed cache for HCA. No prev_block,
                          no SWA, no indexer keys -- HCA blocks are
                          self-contained (single-stream, no overlap).
+- ``MLACache``        -- compressed-latent cache for MLA. Stores the shared
+                         pre-norm latent c_kv and the head-shared post-rope
+                         decoupled key k_pe; per-head K/V are reconstructed
+                         each forward via wkv_b.
 
 ``CausalLM`` builds one cache per layer via ``layer.attn.init_cache()`` on
 the first decode call and threads the same instances through every step.
@@ -120,3 +124,35 @@ class HCACache:
 
     def position(self) -> int:
         return self.total_seen
+
+
+class MLACache:
+    """Compressed-latent cache for MLA. Stores the shared pre-norm latent
+    c_kv [b, s, kv_lora_rank] and the head-shared post-rope key
+    k_pe [b, 1, s, qk_rope_head_dim]. Full per-head K and V are
+    reconstructed each forward by up-projecting c_kv via wkv_b — that
+    is the memory-saving trick.
+
+    Storing pre-norm c_kv (and applying kv_norm after concat) keeps the
+    cache live across parameter updates: a post-norm cache would freeze
+    the affine scale at the value it had when the entry was written,
+    breaking the prefill-vs-decode parity check after any training step.
+    """
+
+    def __init__(self) -> None:
+        self.c_kv: Optional[torch.Tensor] = None
+        self.k_pe: Optional[torch.Tensor] = None
+
+    def update(self, new_c_kv: torch.Tensor, new_k_pe: torch.Tensor):
+        if self.c_kv is None:
+            self.c_kv, self.k_pe = new_c_kv, new_k_pe
+        else:
+            self.c_kv = torch.cat([self.c_kv, new_c_kv], dim=-2)
+            self.k_pe = torch.cat([self.k_pe, new_k_pe], dim=-2)
+        return self.c_kv, self.k_pe
+
+    def seq_len(self) -> int:
+        return 0 if self.c_kv is None else self.c_kv.shape[-2]
+
+    def position(self) -> int:
+        return self.seq_len()

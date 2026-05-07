@@ -149,6 +149,23 @@ def test_kv_cache_parity_hca():
     _parity_check(cfg)
 
 
+def test_kv_cache_parity_mla():
+    # mla carries its own internal half-split rope tables; the model-level
+    # rope positional is a no-op forward on the embedding for non-rope-aware
+    # attention. Caching pre-norm c_kv (and applying kv_norm after concat)
+    # is what keeps prefill+decode == from-scratch under live parameters.
+    cfg = _small_cfg()
+    cfg.attention = OmegaConf.create({
+        "name": "mla",
+        "n_heads": 4,
+        "kv_lora_rank": 8, "q_lora_rank": 16,
+        "qk_nope_head_dim": 4, "qk_rope_head_dim": 4,
+        "v_head_dim": 8,
+        "bias": False, "rope_base": 10000.0, "max_seq_len": 16,
+    })
+    _parity_check(cfg)
+
+
 def test_generate_with_eos_and_no_temperature():
     cfg = _small_cfg()
     model = build_causal_lm(cfg).eval()
