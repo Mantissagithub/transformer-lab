@@ -1,16 +1,32 @@
-"""Multi-head Latent Attention (DeepSeek-V2 §2.1).
+# mla (multi-head latent attention) is deepseek-v2's trick for shrinking the
+# kv-cache without giving up much quality. the main idea is: instead of caching
+# per-head k and v, cache a single shared low-rank latent c_kv (rank
+# kv_lora_rank << d_model) plus a small head-shared decoupled-rope key k_pe.
+# per-head k and v are reconstructed on the fly by up-projecting c_kv through
+# wkv_b each forward.
+#
+# the catch: this v1 does not absorb w_uq / w_uk into the query path, so
+# decode-time flops are the same as recomputing dense k/v every step. kv-cache
+# memory is the only win here — compute parity with mha until the absorption
+# trick is wired up.
+#
+# also: self-attention only. q, k, v must be the same tensor (warns otherwise);
+# cross-attn would silently throw away the encoder output, so the encoder-
+# decoder builder rejects mla up front.
 
-Cache memory is the only optimization: instead of storing per-head K/V we
+"""multi-head latent attention (deepseek-v2 §2.1).
+
+cache memory is the only optimization: instead of storing per-head k/v we
 store a single shared low-rank latent ``c_kv`` (rank ``kv_lora_rank``) plus a
-small head-shared decoupled-RoPE key ``k_pe`` (size ``qk_rope_head_dim``).
-Per-head K and V are reconstructed each forward by up-projecting through
+small head-shared decoupled-rope key ``k_pe`` (size ``qk_rope_head_dim``).
+per-head k and v are reconstructed each forward by up-projecting through
 ``wkv_b``.
 
-This v1 does NOT absorb ``W_UQ``/``W_UK`` into the query path, so decode-time
-FLOPs are the same as recomputing dense K/V every step. KV-cache *memory* is
-the only win.
+this v1 does not absorb ``w_uq`` / ``w_uk`` into the query path, so decode-
+time flops match recomputing dense k/v every step. kv-cache memory is the
+only win.
 
-Self-attention only: ``q``, ``k``, ``v`` must be the same tensor (warns
+self-attention only: ``q``, ``k``, ``v`` must be the same tensor (warns
 otherwise).
 """
 
@@ -28,8 +44,10 @@ from .kv_cache import MLACache
 
 
 def _build_rope_tables(rope_dim: int, max_seq_len: int, base: float = 10000.0):
-    """Half-split rope cos/sin tables. Same convention as csa.py — do not
-    swap in the interleaved variant from positional/rope.py."""
+    """half-split rope cos/sin tables. same convention as csa.py — do not
+    swap in the interleaved variant from positional/rope.py; both rotate the
+    same pairs but in different memory layouts, so mixing silently produces
+    wrong attention scores."""
     half = rope_dim // 2
     freqs = 1.0 / (base ** (torch.arange(0, half).float() / half))
     pos = torch.arange(max_seq_len).float()
@@ -81,15 +99,15 @@ class MultiHeadLatentAttention(AttentionBase):
         self.v_head_dim = v_head_dim
         self.max_seq_len = max_seq_len
 
-        # Q path: down-project, RMSNorm, up-project to per-head [nope, pe].
+        # q path: down-project, rmsnorm, up-project to per-head [nope, pe].
         self.wq_a = nn.Linear(d_model, q_lora_rank, bias=False)
         self.q_norm = nn.RMSNorm(q_lora_rank)
         self.wq_b = nn.Linear(q_lora_rank, n_heads * self.qk_head_dim, bias=False)
 
-        # KV down-projection: produces shared latent c_kv and head-shared k_pe.
+        # kv down-projection: produces the shared latent c_kv and the head-shared k_pe.
         self.wkv_a = nn.Linear(d_model, kv_lora_rank + qk_rope_head_dim, bias=False)
         self.kv_norm = nn.RMSNorm(kv_lora_rank)
-        # KV up-projection: c_kv -> per-head [k_nope, value].
+        # kv up-projection: c_kv -> per-head [k_nope, value].
         self.wkv_b = nn.Linear(
             kv_lora_rank, n_heads * (qk_nope_head_dim + v_head_dim), bias=False
         )
@@ -118,28 +136,29 @@ class MultiHeadLatentAttention(AttentionBase):
                 f"max_seq_len ({self.max_seq_len})"
             )
 
-        # Q: down -> norm -> up -> reshape to [b, n_heads, s, qk_head_dim],
-        # then split nope/pe along the last dim.
+        # q: down -> norm -> up -> reshape to [b, n_heads, s, qk_head_dim], then
+        # split nope/pe along the last dim.
         c_q = self.q_norm(self.wq_a(q))
         q_proj = self.wq_b(c_q).view(b, s, self.n_heads, self.qk_head_dim).transpose(1, 2)
         q_nope, q_pe = q_proj.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
 
-        # KV down-projection: c_kv stays pre-norm (norm is applied AFTER cache
-        # concat so that a parameter update doesn't stale the cached values),
-        # k_pe gets a broadcast head dim.
+        # kv down-projection: c_kv stays pre-norm — kv_norm is applied after the
+        # cache concat so a parameter update doesn't stale the cached values
+        # (rmsnorm has a learnable affine; caching post-norm freezes the scale at
+        # the snapshot it was written under). k_pe gets a broadcast head dim.
         kv_a = self.wkv_a(q)
         c_kv, k_pe = kv_a.split([self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_pe = k_pe.unsqueeze(1)  # [b, 1, s, qk_rope_head_dim]
 
-        # Apply rope at the absolute position of the new tokens.
+        # rope at the absolute position of the new tokens.
         q_pe = _apply_rope(q_pe, self.rope_cos, self.rope_sin, pos_offset)
         k_pe = _apply_rope(k_pe, self.rope_cos, self.rope_sin, pos_offset)
 
-        # Cache: store pre-norm c_kv and post-rope k_pe.
+        # cache stores pre-norm c_kv and post-rope k_pe.
         if past_kv is not None:
             c_kv, k_pe = past_kv.update(c_kv, k_pe)
 
-        # Up-project the (now full) latent into per-head k_nope and value.
+        # up-project the (now full) latent into per-head k_nope and value.
         s_total = c_kv.shape[-2]
         kv = self.wkv_b(self.kv_norm(c_kv))
         kv = kv.view(b, s_total, self.n_heads, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
@@ -148,8 +167,8 @@ class MultiHeadLatentAttention(AttentionBase):
         key = torch.cat([k_nope, k_pe.expand(-1, self.n_heads, -1, -1)], dim=-1)
         query = torch.cat([q_nope, q_pe], dim=-1)
 
-        # F.scaled_dot_product_attention reads its scale from key.shape[-1],
-        # so it correctly uses 1/sqrt(qk_head_dim) even though v_head_dim differs.
+        # f.scaled_dot_product_attention reads its scale from key.shape[-1], so
+        # it correctly uses 1/sqrt(qk_head_dim) even though v_head_dim differs.
         out = scaled_dot_product(query, key, value, mask, self.dropout)
         out = out.transpose(1, 2).contiguous().view(b, s, self.n_heads * self.v_head_dim)
         out = self.wo(out)

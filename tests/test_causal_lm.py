@@ -152,7 +152,7 @@ def test_kv_cache_parity_hca():
 def test_kv_cache_parity_mla():
     # mla carries its own internal half-split rope tables; the model-level
     # rope positional is a no-op forward on the embedding for non-rope-aware
-    # attention. Caching pre-norm c_kv (and applying kv_norm after concat)
+    # attention. caching pre-norm c_kv (and applying kv_norm after the concat)
     # is what keeps prefill+decode == from-scratch under live parameters.
     cfg = _small_cfg()
     cfg.attention = OmegaConf.create({

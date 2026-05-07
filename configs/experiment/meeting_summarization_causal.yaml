@@ -1,0 +1,20 @@
+# @package _global_
+# decoder-only training for meeting summarization. used by attention variants
+# that don't support encoder-decoder cross-attn (csa, hca, mla). the meetingbank
+# dataset is run in `causal` mode: each example is laid out as
+# [BOS] transcript [SEP] summary [EOS] and loss is scored only on the summary
+# continuation (the prefix is masked out via ignore_index=pad_id).
+defaults:
+  - override /connection: residual
+  - override /optimizer: adamw
+
+experiment_name: meeting_summarization_causal
+model:
+  kind: causal_lm
+  tie_embeddings: true
+  # max_seq_len has to hold transcript + summary + control tokens.
+  max_seq_len: 768
+data:
+  mode: causal
+training:
+  ckpt_basename: meeting_model_causal

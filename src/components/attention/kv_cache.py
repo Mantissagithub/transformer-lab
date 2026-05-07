@@ -13,9 +13,9 @@ Three cache shapes, one per attention family:
 - ``HCACache``        -- per-block compressed cache for HCA. No prev_block,
                          no SWA, no indexer keys -- HCA blocks are
                          self-contained (single-stream, no overlap).
-- ``MLACache``        -- compressed-latent cache for MLA. Stores the shared
+- ``MLACache``        -- compressed-latent cache for mla. stores the shared
                          pre-norm latent c_kv and the head-shared post-rope
-                         decoupled key k_pe; per-head K/V are reconstructed
+                         decoupled key k_pe; per-head k/v are reconstructed
                          each forward via wkv_b.
 
 ``CausalLM`` builds one cache per layer via ``layer.attn.init_cache()`` on
@@ -127,16 +127,16 @@ class HCACache:
 
 
 class MLACache:
-    """Compressed-latent cache for MLA. Stores the shared pre-norm latent
+    """compressed-latent cache for mla. stores the shared pre-norm latent
     c_kv [b, s, kv_lora_rank] and the head-shared post-rope key
-    k_pe [b, 1, s, qk_rope_head_dim]. Full per-head K and V are
-    reconstructed each forward by up-projecting c_kv via wkv_b — that
-    is the memory-saving trick.
+    k_pe [b, 1, s, qk_rope_head_dim]. per-head k and v are reconstructed
+    each forward by up-projecting c_kv via wkv_b — that is the memory-
+    saving trick.
 
-    Storing pre-norm c_kv (and applying kv_norm after concat) keeps the
-    cache live across parameter updates: a post-norm cache would freeze
-    the affine scale at the value it had when the entry was written,
-    breaking the prefill-vs-decode parity check after any training step.
+    storing pre-norm c_kv (and applying kv_norm after the concat) keeps the
+    cache live across parameter updates: a post-norm cache would freeze the
+    affine scale at the value it had when the entry was written, breaking
+    the prefill-vs-decode parity check after any training step.
     """
 
     def __init__(self) -> None:

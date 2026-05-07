@@ -29,6 +29,51 @@ def _strip_name(cfg) -> dict:
 _ROPE_AWARE = {"gqa_rope", "sliding_gqa"}
 
 
+# capability matrix per registered attention variant.
+#   cross_attn=False    -> self-attention only (q == k == v); the decoder's
+#                          cross-attn path would silently throw away the
+#                          encoder output. use causal_lm instead.
+#   bidirectional=False -> intrinsically causal (e.g. csa's top-k selector
+#                          and sliding window enforce s < t/m; hca's block
+#                          compression is causal). cannot drive an encoder.
+ATTENTION_CAPABILITIES: dict[str, dict[str, bool]] = {
+    "mha":            {"cross_attn": True,  "bidirectional": True},
+    "gqa":            {"cross_attn": True,  "bidirectional": True},
+    "gqa_rope":       {"cross_attn": True,  "bidirectional": True},
+    "mqa":            {"cross_attn": True,  "bidirectional": True},
+    "sliding_window": {"cross_attn": True,  "bidirectional": True},
+    "sliding_gqa":    {"cross_attn": True,  "bidirectional": True},
+    "csa":            {"cross_attn": False, "bidirectional": False},
+    "hca":            {"cross_attn": False, "bidirectional": False},
+    "mla":            {"cross_attn": False, "bidirectional": True},
+}
+
+
+def _attention_layer_names(attn_cfg) -> list[str]:
+    if "pattern" in attn_cfg:
+        return list(dict.fromkeys(attn_cfg.pattern))
+    return [attn_cfg.name]
+
+
+def supports_encoder_decoder(attn_cfg) -> bool:
+    for name in _attention_layer_names(attn_cfg):
+        caps = ATTENTION_CAPABILITIES.get(name)
+        if not caps or not caps["cross_attn"] or not caps["bidirectional"]:
+            return False
+    return True
+
+
+def default_model_kind(attn_cfg) -> str:
+    """encoder_decoder if every layer in the attention spec supports cross-
+    attn and is bidirectional; causal_lm otherwise. unknown variants default
+    to encoder_decoder so user-defined registrations are not silently
+    rerouted."""
+    for name in _attention_layer_names(attn_cfg):
+        if name not in ATTENTION_CAPABILITIES:
+            return "encoder_decoder"
+    return "encoder_decoder" if supports_encoder_decoder(attn_cfg) else "causal_lm"
+
+
 def _build_attention_for_layer(
     cfg,
     layer_idx: int,
@@ -105,6 +150,18 @@ def _rope_for_layer(positional_cfg, base_rope: Optional[nn.Module], layer_idx: i
 
 
 def build_transformer(cfg: DictConfig) -> Transformer:
+    if not supports_encoder_decoder(cfg.attention):
+        offenders = [
+            n for n in _attention_layer_names(cfg.attention)
+            if not ATTENTION_CAPABILITIES.get(n, {}).get("cross_attn", False)
+            or not ATTENTION_CAPABILITIES.get(n, {}).get("bidirectional", False)
+        ]
+        raise ValueError(
+            f"attention {offenders!r} cannot run in encoder-decoder mode "
+            "(self-attention only or intrinsically causal). Either pick a "
+            "cross-attn-capable variant (mha, gqa, gqa_rope, mqa, "
+            "sliding_window, sliding_gqa) or set model.kind=causal_lm."
+        )
     model_cfg = cfg.model
     d_model = model_cfg.d_model
     dropout = model_cfg.dropout
