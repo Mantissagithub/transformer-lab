@@ -46,6 +46,7 @@ ATTENTION_CAPABILITIES: dict[str, dict[str, bool]] = {
     "csa":            {"cross_attn": False, "bidirectional": False},
     "hca":            {"cross_attn": False, "bidirectional": False},
     "mla":            {"cross_attn": False, "bidirectional": True},
+    "mla_absorbed":   {"cross_attn": False, "bidirectional": True},
     "msa":            {"cross_attn": False, "bidirectional": False},
     "kda":            {"cross_attn": False, "bidirectional": False},
 }
@@ -103,7 +104,7 @@ def _build_attention_for_layer(
     # csa builds its own rope tables sized by max_seq_len; mla raises when the
     # sequence overruns. for both, ensure the per-attention max_seq_len is at
     # least the model's, so the run can't silently OOB into NaN-land.
-    if name in ("csa", "mla") and max_seq_len is not None:
+    if name in ("csa", "mla", "mla_absorbed") and max_seq_len is not None:
         kwargs["max_seq_len"] = max(max_seq_len, kwargs.get("max_seq_len", 0))
     return ATTENTION.build(name, **kwargs)
 
