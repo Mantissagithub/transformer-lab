@@ -107,7 +107,7 @@ def test_publish_consolidated_outputs_copies_latest_run_files(tmp_path):
 
     assert "owner/a" in (root / "results.jsonl").read_text()
     assert "owner/a" in (root / "summary.csv").read_text()
-    assert "Transformer Lab — Attention Benchmark" in (root / "README.md").read_text()
+    assert "owner/a" in (root / "README.md").read_text()
     assert json.loads((root / "settings.json").read_text())["collection_slug"] == "owner/collection"
 
 
