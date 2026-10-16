@@ -52,7 +52,6 @@ def scaled_dot_product(
             attn_mask = bias
         elif attn_mask.dtype == torch.bool:
             additive = torch.zeros_like(bias)
-            # set `False` vals to -inf (later becomes 0 by softmax)
             additive.masked_fill_(~attn_mask, float("-inf"))
             attn_mask = additive + bias
         else:
