@@ -1,7 +1,7 @@
+import pytest
 import torch
 
 from src.components.attention.mla import MultiHeadLatentAttention
-from src.components.attention.mla_absorbed import MultiHeadLatentAttentionAbsorbed
 
 
 def _config():
@@ -22,7 +22,7 @@ def test_absorbed_matches_standard():
     torch.manual_seed(0)
     mod_config = _config()
     standard = MultiHeadLatentAttention(**mod_config).eval()
-    absorbed = MultiHeadLatentAttentionAbsorbed(**mod_config).eval()
+    absorbed = MultiHeadLatentAttention(**mod_config, weight_absorption=True).eval()
     absorbed.load_state_dict(standard.state_dict(), strict=True)
 
     x = torch.randn(2, 5, mod_config["d_model"])
@@ -36,9 +36,10 @@ def test_absorbed_matches_standard():
     torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-5)
 
 
-def test_absorbed_backward():
+@pytest.mark.parametrize("weight_absorption", [False, True])
+def test_mla_backward(weight_absorption):
     torch.manual_seed(0)
-    mod = MultiHeadLatentAttentionAbsorbed(**_config())
+    mod = MultiHeadLatentAttention(**_config(), weight_absorption=weight_absorption)
     x = torch.randn(2, 5, mod.d_model, requires_grad=True)
     mask = torch.ones(5, 5, dtype=torch.bool).tril()
 
@@ -54,9 +55,10 @@ def test_absorbed_backward():
 
 
 @torch.no_grad()
-def test_absorbed_causal_mask():
+@pytest.mark.parametrize("weight_absorption", [False, True])
+def test_mla_causal_mask(weight_absorption):
     torch.manual_seed(0)
-    mod = MultiHeadLatentAttentionAbsorbed(**_config()).eval()
+    mod = MultiHeadLatentAttention(**_config(), weight_absorption=weight_absorption).eval()
     x = torch.randn(2, 5, mod.d_model)
     changed = x.clone()
     changed[:, 3:] = torch.randn_like(changed[:, 3:])
@@ -69,9 +71,10 @@ def test_absorbed_causal_mask():
 
 
 @torch.no_grad()
-def test_absorbed_cached_decode_matches_full_forward():
+@pytest.mark.parametrize("weight_absorption", [False, True])
+def test_mla_cached_decode_matches_full_forward(weight_absorption):
     torch.manual_seed(0)
-    mod = MultiHeadLatentAttentionAbsorbed(**_config()).eval()
+    mod = MultiHeadLatentAttention(**_config(), weight_absorption=weight_absorption).eval()
     x = torch.randn(2, 5, mod.d_model)
     mask = torch.ones(5, 5, dtype=torch.bool).tril()
     expected = mod(x, x, x, mask=mask)
