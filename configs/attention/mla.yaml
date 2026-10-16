@@ -1,4 +1,5 @@
 name: mla
+weight_absorption: false
 n_heads: 4
 kv_lora_rank: 16
 q_lora_rank: 32
