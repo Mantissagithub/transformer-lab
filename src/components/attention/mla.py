@@ -2,13 +2,8 @@
 # kv-cache without giving up much quality. the main idea is: instead of caching
 # per-head k and v, cache a single shared low-rank latent c_kv (rank
 # kv_lora_rank << d_model) plus a small head-shared decoupled-rope key k_pe.
-# per-head k and v are reconstructed on the fly by up-projecting c_kv through
-# wkv_b each forward.
-#
-# the catch: this v1 does not absorb w_uq / w_uk into the query path, so
-# decode-time flops are the same as recomputing dense k/v every step. kv-cache
-# memory is the only win here — compute parity with mha until the absorption
-# trick is wired up.
+# weight_absorption optionally moves the key projection to the query and
+# the value projection after attention, avoiding per-head k/v reconstruction
 #
 # also: self-attention only. q, k, v must be the same tensor (warns otherwise);
 # cross-attn would silently throw away the encoder output, so the encoder-
@@ -16,15 +11,13 @@
 
 """multi-head latent attention (deepseek-v2 §2.1).
 
-cache memory is the only optimization: instead of storing per-head k/v we
+instead of storing per-head k/v we
 store a single shared low-rank latent ``c_kv`` (rank ``kv_lora_rank``) plus a
 small head-shared decoupled-rope key ``k_pe`` (size ``qk_rope_head_dim``).
-per-head k and v are reconstructed each forward by up-projecting through
-``wkv_b``.
-
-this v1 does not absorb ``w_uq`` / ``w_uk`` into the query path, so decode-
-time flops match recomputing dense k/v every step. kv-cache memory is the
-only win.
+by default, per-head k and v are reconstructed through ``wkv_b``.
+with ``weight_absorption=True``, attention operates on the latent directly,
+while the position-dependent RoPE path stays separate. both paths share
+parameters and support training and cached decoding.
 
 self-attention only: ``q``, ``k``, ``v`` must be the same tensor (warns
 otherwise).
@@ -87,6 +80,7 @@ class MultiHeadLatentAttention(AttentionBase):
         bias: bool = False,
         rope_base: float = 10000.0,
         max_seq_len: int = 4096,
+        weight_absorption: bool = False,
     ) -> None:
         super().__init__(d_model, n_heads, dropout)
         if qk_rope_head_dim % 2 != 0:
@@ -98,6 +92,7 @@ class MultiHeadLatentAttention(AttentionBase):
         self.qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         self.v_head_dim = v_head_dim
         self.max_seq_len = max_seq_len
+        self.weight_absorption = weight_absorption
 
         # q path: down-project, rmsnorm, up-project to per-head [nope, pe].
         self.wq_a = nn.Linear(d_model, q_lora_rank, bias=False)
@@ -158,19 +153,57 @@ class MultiHeadLatentAttention(AttentionBase):
         if past_kv is not None:
             c_kv, k_pe = past_kv.update(c_kv, k_pe)
 
-        # up-project the (now full) latent into per-head k_nope and value.
-        s_total = c_kv.shape[-2]
-        kv = self.wkv_b(self.kv_norm(c_kv))
-        kv = kv.view(b, s_total, self.n_heads, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
-        k_nope, value = kv.split([self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+        c_kv = self.kv_norm(c_kv)
+        if self.weight_absorption:
+            # apply key up-projection weights to the query and value up-projection
+            # weights after attention, **avoiding per-head cached k/v reconstruction**
+            # wkv_b: [n_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank]
+            wkv_b = self.wkv_b.weight.view(
+                self.n_heads,
+                self.qk_nope_head_dim + self.v_head_dim,
+                self.kv_lora_rank,
+            )
 
-        key = torch.cat([k_nope, k_pe.expand(-1, self.n_heads, -1, -1)], dim=-1)
-        query = torch.cat([q_nope, q_pe], dim=-1)
+            wk_b, wv_b = wkv_b.split(
+                [self.qk_nope_head_dim, self.v_head_dim], dim=1
+            )
 
-        # f.scaled_dot_product_attention reads its scale from key.shape[-1], so
-        # it correctly uses 1/sqrt(qk_head_dim) even though v_head_dim differs.
-        out = scaled_dot_product(query, key, value, mask, self.dropout)
+            # [b, n_heads, s, qk_nope_head_dim] @ [n_heads, qk_nope_head_dim, kv_lora_rank]
+            # -> [b, n_heads, s, kv_lora_rank]
+            q_absorbed = torch.matmul(q_nope, wk_b)
+
+            # concatenate nope (content) and rope (position) query / key vectors
+            query = torch.cat([q_absorbed, q_pe], dim=-1)
+            key = torch.cat([c_kv.unsqueeze(1), k_pe], dim=-1).expand(
+                -1, self.n_heads, -1, -1
+            )
+            value = c_kv.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
+
+            # out_latent: [b, n_heads, s, kv_lora_rank]
+            out_latent = scaled_dot_product(
+                query, key, value, mask, self.dropout,
+                # sdpa uses the query's last dimension to compute its default scale
+                # explicitly preserve the original attention scale after absorption
+                scale=self.qk_head_dim ** -0.5,
+            )
+
+            # [b, n_heads, s, kv_lora_rank] @ [n_heads, kv_lora_rank, v_head_dim]
+            # -> [b, n_heads, s, v_head_dim]
+            out = torch.matmul(out_latent, wv_b.transpose(-1, -2))
+        else:
+            # up-project the (now full) latent into per-head k_nope and value.
+            s_total = c_kv.shape[-2]
+            kv = self.wkv_b(c_kv)
+            kv = kv.view(b, s_total, self.n_heads, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
+            k_nope, value = kv.split([self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+            key = torch.cat([k_nope, k_pe.expand(-1, self.n_heads, -1, -1)], dim=-1)
+            query = torch.cat([q_nope, q_pe], dim=-1)
+            # f.scaled_dot_product_attention reads its scale from key.shape[-1], so
+            # it correctly uses 1/sqrt(qk_head_dim) even though v_head_dim differs.
+            out = scaled_dot_product(query, key, value, mask, self.dropout)
+        # merge heads: [b, s, n_heads * v_head_dim]
         out = out.transpose(1, 2).contiguous().view(b, s, self.n_heads * self.v_head_dim)
+        # output: [b, s, d_model]
         out = self.wo(out)
 
         if return_kv:
