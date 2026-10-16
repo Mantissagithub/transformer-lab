@@ -137,23 +137,20 @@ class MultiHeadLatentAttention(AttentionBase):
         q_proj = self.wq_b(c_q).view(b, s, self.n_heads, self.qk_head_dim).transpose(1, 2)
         q_nope, q_pe = q_proj.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
 
-        # kv down-projection: c_kv stays pre-norm — kv_norm is applied after the
-        # cache concat so a parameter update doesn't stale the cached values
-        # (rmsnorm has a learnable affine; caching post-norm freezes the scale at
-        # the snapshot it was written under). k_pe gets a broadcast head dim.
+        # normalize new latents before caching to avoid renormalizing past tokens
         kv_a = self.wkv_a(q)
         c_kv, k_pe = kv_a.split([self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        c_kv = self.kv_norm(c_kv)
         k_pe = k_pe.unsqueeze(1)  # [b, 1, s, qk_rope_head_dim]
 
         # rope at the absolute position of the new tokens.
         q_pe = _apply_rope(q_pe, self.rope_cos, self.rope_sin, pos_offset)
         k_pe = _apply_rope(k_pe, self.rope_cos, self.rope_sin, pos_offset)
 
-        # cache stores pre-norm c_kv and post-rope k_pe.
+        # cache stores normalized c_kv and post-rope k_pe
         if past_kv is not None:
             c_kv, k_pe = past_kv.update(c_kv, k_pe)
 
-        c_kv = self.kv_norm(c_kv)
         if self.weight_absorption:
             # apply key up-projection weights to the query and value up-projection
             # weights after attention, **avoiding per-head cached k/v reconstruction**
