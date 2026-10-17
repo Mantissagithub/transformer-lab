@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -76,15 +77,27 @@ def test_best_checkpoint_only_saves_improvements(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_validation_loss_is_token_weighted_and_restores_training_mode() -> None:
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS is unavailable"
+            ),
+        ),
+    ],
+)
+def test_validation_loss_is_token_weighted_and_restores_training_mode(device) -> None:
     logits = torch.tensor(
         [[[0.0, 3.0, 1.0], [2.0, 0.0, 1.0], [0.0, 1.0, 3.0]]]
     )
     labels = torch.tensor([[1, 0, 2]])
     trainer = Trainer.__new__(Trainer)
     trainer.kind = "causal_lm"
-    trainer.device = torch.device("cpu")
-    trainer.model = _FixedLogits(logits).train()
+    trainer.device = torch.device(device)
+    trainer.model = _FixedLogits(logits).to(trainer.device).train()
     trainer.data = {
         "val_loader": [{"input_ids": torch.ones_like(labels), "labels": labels}],
         "pad_token_id": 0,
@@ -100,5 +113,39 @@ def test_validation_loss_is_token_weighted_and_restores_training_mode() -> None:
         reduction="sum",
     ).item() / 2
 
-    assert actual == expected
+    assert actual == pytest.approx(expected, rel=1e-5)
+    assert trainer.model.training
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS is unavailable")
+def test_mps_validation_preserves_float64_accumulation() -> None:
+    trainer = Trainer.__new__(Trainer)
+    trainer.kind = "causal_lm"
+    trainer.device = torch.device("mps")
+    trainer.model = torch.nn.Embedding(2, 3).to(trainer.device).train()
+    with torch.no_grad():
+        trainer.model.weight.copy_(torch.tensor([[0.0, 0.0, 1e8], [0.0, 0.0, 0.0]], device="mps"))
+    trainer.data = {
+        "val_loader": [
+            {"input_ids": torch.tensor([[index]]), "labels": torch.tensor([[1]])}
+            for index in (0, 1, 1)
+        ],
+        "pad_token_id": 0,
+    }
+    trainer.autocast_dtype = None
+    trainer.dist_env = SimpleNamespace(is_dist=False)
+
+    # MPS does not support float64:
+    # https://docs.pytorch.org/docs/main/notes/mps.html#double-precision-types
+    # Use Python double precision to compute the expected sum of MPS batch losses.
+    batch_losses = []
+    with torch.no_grad():
+        for batch in trainer.data["val_loader"]:
+            logits, labels = trainer._validation_logits(batch)
+            batch_losses.append(torch.nn.functional.cross_entropy(
+                logits.reshape(-1, 3), labels.reshape(-1), reduction="sum"
+            ).item())
+
+    actual = trainer._validation_loss()
+    assert actual == pytest.approx(sum(batch_losses) / 3, rel=0, abs=1e-6)
     assert trainer.model.training

@@ -58,6 +58,8 @@ class Trainer:
         )
         if torch.cuda.is_available():
             self.device = torch.device(f"cuda:{self.dist_env.local_rank}")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
 
@@ -226,7 +228,8 @@ class Trainer:
         was_training = self.model.training
         self.model.eval()
         pad_id = int(self.data["pad_token_id"])
-        totals = torch.zeros(2, device=self.device, dtype=torch.float64)
+        totals_device = torch.device("cpu") if self.device.type == "mps" else self.device
+        totals = torch.zeros(2, device=totals_device, dtype=torch.float64)
 
         with torch.inference_mode():
             for batch in val_loader:
@@ -238,8 +241,8 @@ class Trainer:
                     flat_labels,
                     ignore_index=pad_id,
                     reduction="sum",
-                ).double()
-                totals[1] += (flat_labels != pad_id).sum()
+                ).to(totals.device).double()
+                totals[1] += (flat_labels != pad_id).sum().to(totals.device)
 
         if self.dist_env.is_dist:
             dist.all_reduce(totals, op=dist.ReduceOp.SUM)
