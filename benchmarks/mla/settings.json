@@ -1,0 +1,22 @@
+{
+  "collection_slug": "Pradheep1647/transformer-lab-6a07fe3185f5728e217997e0",
+  "repo_id": [
+    "junuxyz/mla-meetingbank-bs8-e20-fp32-12"
+  ],
+  "dataset": "meetingbank",
+  "dataset_hf_path": "huuuyeah/meetingbank",
+  "split": "validation",
+  "max_eval_batches": 0,
+  "generation_samples": 128,
+  "batch_size": 8,
+  "num_workers": 0,
+  "device": "mps",
+  "precision": "fp32",
+  "output_dir": "benchmarks/mla",
+  "skip_generation": false,
+  "bertscore": "off",
+  "max_new_tokens": 0,
+  "render_only": false,
+  "repo_count": 1,
+  "started_at": "2026-10-17T15:17:05.414503+00:00"
+}
