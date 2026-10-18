@@ -4,7 +4,9 @@ import json
 import math
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
+import pytest
 import torch
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_hf_collection.py"
@@ -127,3 +129,23 @@ def test_merge_results_replaces_matching_repo_and_keeps_others():
     assert merged["owner/a"].eval_loss == 1.0
     assert merged["owner/b"].eval_loss == 3.0
     assert merged["owner/c"].status == "failed"
+
+
+@pytest.mark.parametrize("cuda,mps,expected", [(True, True, "cuda"), (False, True, "mps"), (False, False, "cpu")])
+def test_auto_device_priority(monkeypatch, cuda, mps, expected):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: mps)
+    assert benchmark._resolve_device("auto").type == expected
+
+
+def test_explicit_mps_requires_available_backend(monkeypatch):
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="mps requested"):
+        benchmark._resolve_device("mps")
+
+
+def test_sync_waits_for_mps(monkeypatch):
+    synchronize = Mock()
+    monkeypatch.setattr(torch.mps, "synchronize", synchronize)
+    benchmark._sync(torch.device("mps"))
+    synchronize.assert_called_once_with()
