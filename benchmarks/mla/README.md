@@ -96,6 +96,6 @@ Logits matched within `atol=1e-5, rtol=1e-4`, with identical top-1 predictions.
 
 **Performance**
 
-Despite the expected benefit from fewer FLOPs, absorption was **slower** in decode for this configuration. Controlled comparisons indicate that at these small tensor sizes, the extra batched matrix multiplications and K/V layout handling cost more than the K/V reconstruction they eliminate.
+Avoiding per-head K/V reconstruction at each decode step was expected to reduce latency, but absorption was **slower** in this configuration. Controlled comparisons indicate that at these small tensor sizes, the extra batched matrix multiplications and K/V layout handling cost more than the K/V reconstruction they eliminate.
 
 [Comparison script](../../scripts/benchmark_mla.py) · [Raw results](standard_vs_absorbed.json)
