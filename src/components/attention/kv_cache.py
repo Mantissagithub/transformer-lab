@@ -14,9 +14,9 @@ Three cache shapes, one per attention family:
                          no SWA, no indexer keys -- HCA blocks are
                          self-contained (single-stream, no overlap).
 - ``MLACache``        -- compressed-latent cache for mla. stores the shared
-                         pre-norm latent c_kv and the head-shared post-rope
-                         decoupled key k_pe; per-head k/v are reconstructed
-                         each forward via wkv_b.
+                         normalized latent c_kv and the head-shared post-rope
+                         decoupled key k_pe. both standard and absorbed mla
+                         use this cache format.
 - ``MSACache``        -- full head-split k/v buffer plus the index-branch keys
                          for msa. block-sparse selection has to gather from
                          every past block, so nothing is dropped or compressed.
@@ -130,16 +130,13 @@ class HCACache:
 
 
 class MLACache:
-    """compressed-latent cache for mla. stores the shared pre-norm latent
+    """compressed-latent cache for mla. stores the shared normalized latent
     c_kv [b, s, kv_lora_rank] and the head-shared post-rope key
-    k_pe [b, 1, s, qk_rope_head_dim]. per-head k and v are reconstructed
-    each forward by up-projecting c_kv via wkv_b — that is the memory-
-    saving trick.
+    k_pe [b, 1, s, qk_rope_head_dim]. both standard and absorbed mla use
+    this format, normalizing only newly appended latents.
 
-    storing pre-norm c_kv (and applying kv_norm after the concat) keeps the
-    cache live across parameter updates: a post-norm cache would freeze the
-    affine scale at the value it had when the entry was written, breaking
-    the prefill-vs-decode parity check after any training step.
+    the cache is for inference with fixed parameters. discard it after
+    parameter updates or loading a different checkpoint.
     """
 
     def __init__(self) -> None:

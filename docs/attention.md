@@ -78,11 +78,13 @@ The Gemma-style hybrid pattern is tagged to the [Gemma 3 Technical Report](https
 
 ![MLA architecture](assets/mla.png)
 
-Multi-head latent attention is tagged to [DeepSeek-V2](https://arxiv.org/abs/2405.04434). It caches a compact latent KV state plus a decoupled RoPE key, then reconstructs per-head K/V during attention.
+Multi-head latent attention is tagged to [DeepSeek-V2](https://arxiv.org/abs/2405.04434). It caches a compact latent KV state plus a decoupled RoPE key.
+
+By default, it reconstructs per-head K/V during attention. Set `attention.weight_absorption=true` to move the content-key projection to the query and the value projection after attention, avoiding per-head K/V reconstruction.
 
 - Implementation: [`mla.py`](../src/components/attention/mla.py)
 - Config: [`mla.yaml`](../configs/attention/mla.yaml)
-- Use when: KV-cache memory is the main target. The current implementation saves cache memory, but does not yet reduce decode-time projection FLOPs.
+- Use when: KV-cache memory is the main target, or you want to compare standard and absorbed MLA execution with the same weights. The absorbed path prioritizes correctness and readability. See the [MLA benchmark](../benchmarks/mla/README.md) for MPS measurements.
 
 ## `csa`
 
