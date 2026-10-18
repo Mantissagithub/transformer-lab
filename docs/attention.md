@@ -84,7 +84,7 @@ By default, it reconstructs per-head K/V during attention. Set `attention.weight
 
 - Implementation: [`mla.py`](../src/components/attention/mla.py)
 - Config: [`mla.yaml`](../configs/attention/mla.yaml)
-- Use when: KV-cache memory is the main target, or you want to compare standard and absorbed MLA execution with the same weights. Note that absorbed path prioritizes correctness and readability. Performance has not been benchmarked, and further optimization may require specialized kernels.
+- Use when: KV-cache memory is the main target, or you want to compare standard and absorbed MLA execution with the same weights. The absorbed path prioritizes correctness and readability. See the [MLA benchmark](../benchmarks/mla/README.md) for MPS measurements.
 
 ## `csa`
 
