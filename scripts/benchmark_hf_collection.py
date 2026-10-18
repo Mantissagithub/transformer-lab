@@ -226,7 +226,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--generation-samples", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--precision", default="fp32", choices=["fp32", "bf16", "fp16"])
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--skip-generation", action="store_true")
@@ -692,9 +692,13 @@ def _hf_token(root: Path, required: bool) -> str | None:
 
 def _resolve_device(name: str) -> torch.device:
     if name == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     if name == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("cuda requested but torch.cuda.is_available() is false")
+    if name == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("mps requested but torch.backends.mps.is_available() is false")
     return torch.device(name)
 
 
@@ -710,6 +714,8 @@ def _autocast(device: torch.device, precision: str):
 def _sync(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
 
 
 def _clear_cuda() -> None:
