@@ -1,0 +1,75 @@
+{
+  "repo_id": "junuxyz/mla-meetingbank-bs8-e20-fp32-12",
+  "device": "mps",
+  "prompt_length": 512,
+  "decode_steps": 64,
+  "repeats": 5,
+  "output": "benchmarks/mla/standard_vs_absorbed.json",
+  "torch": "2.12.0",
+  "precision": "fp32",
+  "config_revision": "e6c0e84c9515fdbc8e7e438272f993bdd4537e36",
+  "checkpoint_file": "meeting_causal_mla_best.pt",
+  "workload": "batch=1; seeded synthetic tokens; fixed teacher-forced cached decode",
+  "seed": 42,
+  "warmup_runs_per_mode": 2,
+  "atol": 1e-05,
+  "rtol": 0.0001,
+  "logit_positions": "last prompt position and every decode step",
+  "max_logit_error": 4.291534423828125e-06,
+  "logits_close": true,
+  "same_top1": true,
+  "modes": {
+    "mla": {
+      "median_prefill_ms": 12.605042196810246,
+      "median_decode_ms_per_token": 3.003766280016862,
+      "trials": [
+        {
+          "prefill_ms": 9.80212539434433,
+          "decode_ms": 192.24104192107916
+        },
+        {
+          "prefill_ms": 18.730790819972754,
+          "decode_ms": 182.31020821258426
+        },
+        {
+          "prefill_ms": 10.447083041071892,
+          "decode_ms": 182.34970793128014
+        },
+        {
+          "prefill_ms": 12.605042196810246,
+          "decode_ms": 220.04383290186524
+        },
+        {
+          "prefill_ms": 12.614207807928324,
+          "decode_ms": 210.94241691753268
+        }
+      ]
+    },
+    "absorbed": {
+      "median_prefill_ms": 12.268333230167627,
+      "median_decode_ms_per_token": 3.432933590374887,
+      "trials": [
+        {
+          "prefill_ms": 8.78537492826581,
+          "decode_ms": 215.69595811888576
+        },
+        {
+          "prefill_ms": 17.137416172772646,
+          "decode_ms": 252.9876660555601
+        },
+        {
+          "prefill_ms": 9.3773752450943,
+          "decode_ms": 197.51345785334706
+        },
+        {
+          "prefill_ms": 12.268333230167627,
+          "decode_ms": 219.70774978399277
+        },
+        {
+          "prefill_ms": 13.404583092778921,
+          "decode_ms": 300.96383299678564
+        }
+      ]
+    }
+  }
+}

@@ -790,7 +790,7 @@ VARIANT_COLORS: dict[str, str] = {
     "sliding_window": "#8172B3",
     "sliding_gqa":    "#937860",
     "gemma3_hybrid":  "#DA8BC3",
-    "mla":            "#8C8C8C",
+    "mla":            "#419D95",
     "csa":            "#CCB974",
     "hca":            "#64B5CD",
     "msa":            "#E63946",

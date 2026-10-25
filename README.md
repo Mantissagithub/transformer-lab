@@ -150,6 +150,57 @@ The new implementation is the one from the official MiniMax tech report; the old
 
 with that, the numbers make sense. under teacher forcing the old score-bias acts like a mild prior: the gold token is handed over at every step, nothing goes off the rails, and the extra bias even nudges perplexity slightly lower. that is why old looks a hair better on eval loss / ppl / token accuracy. but that regime never stresses the selector. the moment you generate free-running, the two fixes pay off: clean attention, a selector trained to mimic it, and guaranteed local context mean errors stop compounding. that's the ~2× ROUGE and ~3× BLEU jump (ROUGE-L 0.083 → 0.173, BLEU 2.2 → 6.8). throughput is identical, so it's a pure correctness win. the teacher-forced numbers that "favour" the old impl are an artifact of the crutch, not a real edge. judge attention on generation, not perplexity.
 
+## MLA
+
+Trained MLA on MeetingBank using the existing causal summarization setup: 20 epochs, batch size 8, fp32, lr 1e-4, and seed 42 in about 2 hours on Apple M5 Pro (MPS).
+
+### training run
+
+![MLA training loss](benchmarks/mla/assets/loss_curves.png)
+
+The final logged training loss was 2.47865 and the final validation loss was 3.26368.
+
+### checkpoint selection
+
+Validation ran halfway through each epoch and at epoch end. The trainer kept the checkpoint with the lowest validation loss:
+
+| checkpoint | epoch index | optimizer step | validation loss |
+|---|---:|---:|---:|
+| `meeting_causal_mla_best.pt` | 12 | 8,411 | **3.08166** |
+
+Best checkpoint was used for evaluation.
+
+### benchmark
+
+Evaluated the best MLA checkpoint on Apple M5 Pro / MPS in fp32 with weight absorption disabled. Core metrics use the full validation split with batch size 8. Generation metrics use 128 greedy summaries, processed one at a time. Kept the results separate from the cross-model attention benchmark because they use different hardware.
+
+<table>
+  <tr>
+    <td align="center"><strong>evaluation quality</strong><br><img src="benchmarks/mla/assets/eval_quality_causal.png" alt="MLA evaluation quality"></td>
+    <td align="center"><strong>generation quality</strong><br><img src="benchmarks/mla/assets/generation_quality_causal.png" alt="MLA generation quality"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>throughput</strong><br><img src="benchmarks/mla/assets/throughput.png" alt="MLA throughput"></td>
+    <td align="center"><strong>quality vs. efficiency</strong><br><img src="benchmarks/mla/assets/tradeoff.png" alt="MLA quality versus efficiency comparison"></td>
+  </tr>
+</table>
+
+| metric | MLA |
+|---|---:|
+| validation loss | 3.08165996 |
+| perplexity | 21.7946 |
+| token accuracy | 0.4969 |
+| ROUGE-L | 0.1474 |
+| BLEU | 3.9311 |
+| evaluation throughput, tok/s | 3,822.60 |
+| generation throughput, tok/s | 298.87 |
+
+### weight absorption inference comparison
+
+[`scripts/benchmark_mla.py`](scripts/benchmark_mla.py) compares absorption off/on using one checkpoint and identical synthetic token sequences. It reports prefill time, decode time per token, and logit agreement in [standard_vs_absorbed.json](benchmarks/mla/standard_vs_absorbed.json).
+
+![Standard vs. absorbed MLA](benchmarks/mla/assets/standard_vs_absorbed.png)
+
 ## Tests
 
 ```bash

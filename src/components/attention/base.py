@@ -39,6 +39,7 @@ def scaled_dot_product(
     mask: Optional[torch.Tensor],
     dropout: Optional[nn.Dropout],
     bias: Optional[torch.Tensor] = None,
+    scale: Optional[float] = None,
 ) -> torch.Tensor:
     attn_mask: Optional[torch.Tensor] = None
     if mask is not None:
@@ -57,4 +58,4 @@ def scaled_dot_product(
             attn_mask = attn_mask + bias
 
     p = dropout.p if (isinstance(dropout, nn.Dropout) and dropout.training) else 0.0
-    return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=p)
+    return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=p, scale=scale)
